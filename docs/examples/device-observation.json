@@ -1,0 +1,23 @@
+{
+  "schema_version": "0.2",
+  "device_id": "esp32-01",
+  "session_id": "boot-001",
+  "seq": 12,
+  "source": "mock",
+  "zone_id": "right",
+  "window_start_ms": 1200,
+  "window_end_ms": 1700,
+  "beep_count": 1,
+  "field_summary": {
+    "rms": 120.0,
+    "unit": "adc_count",
+    "sample_count": 500,
+    "sample_rate_hz": 1000,
+    "method": "ac_rms_v1"
+  },
+  "quality": {
+    "status": "valid",
+    "reasons": []
+  },
+  "calibration_id": null
+}
