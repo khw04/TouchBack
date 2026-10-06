@@ -21,6 +21,3 @@ Thumbs.db
 # Local measurements/logs: share reviewed samples explicitly
 data/raw/
 logs/
-
-# Original PDFs contain personal data; preserve locally, exclude from public repository
-/pdf/*.pdf
