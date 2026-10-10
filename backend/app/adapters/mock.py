@@ -51,7 +51,7 @@ class MockAdapter:
             key=lambda frame: frame.arrival_ms,
         )
         self._buffer: list[Observation] = []
-        self._seen: set[str] = set()
+        self._seen: dict[str, DeviceObservation] = {}
         self._returned: set[str] = set()
         self._session: tuple[str, str] | None = None
         self._last_seq = -1
@@ -71,13 +71,15 @@ class MockAdapter:
                 continue  # reboot/multiple-device simulation belongs to the live adapter ticket
             identifier = f"{device.device_id}:{device.session_id}:{device.seq}"
             if identifier in self._seen:
+                if self._seen[identifier] != device:
+                    self._transport_error = "conflicting_duplicate"
                 continue
             if device.seq <= self._last_seq:
                 self._transport_error = "sequence_regressed"
                 continue
             if self._last_seq >= 0 and device.seq != self._last_seq + 1:
                 self._clock_samples = 0
-            self._seen.add(identifier)
+            self._seen[identifier] = device.model_copy(deep=True)
             self._last_seq = device.seq
             self._clock_samples += 1
             verified = self._clock_samples >= 5
