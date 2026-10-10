@@ -9,7 +9,7 @@ P0는 개발 시작 단계이며 제안서 전체 완료를 뜻하지 않는다.
 
 ## 현재 상태
 
-2026-10-10: C-KH-01 공통 계약/서버, C-KH-02 Mock 어댑터와 C-KH-03 Mock 의도 검증 Skill을 별도 PR로 구현·검증했다(리뷰·병합 대기). HTTP는 `/health`만 제공하며 Agent·실행 API·실제 센서 어댑터·실측 검증은 아직 미구현이다. Mock 입력 사용은 [Mock관측](docs/Mock관측.md)을 따른다. 설치·실행·테스트는 [백엔드 README](backend/README.md)를 따른다.
+2026-10-10: C-KH-01 공통 계약/서버, C-KH-02 Mock 어댑터와 C-KH-03 Mock 의도 검증 Skill을 별도 PR로 구현·검증했다(리뷰·병합 대기). HTTP는 `/health`만 제공하며 Serial/Replay 어댑터는 코드 검증을 마쳤으며 [입력어댑터](docs/입력어댑터.md)에 사용법을 정리했다. Agent·실행 API와 실제 장치/실측 검증은 아직 미완료다. Mock 입력 사용은 [Mock관측](docs/Mock관측.md)을 따른다. 설치·실행·테스트는 [백엔드 README](backend/README.md)를 따른다.
 센서·부품은 [확정 견적 구성](docs/센서선정.md)대로 구매하기로 했다. 배송·수령과 인덕션 확보는 별도 확인이 필요하다. 멘토 피드백에 따라 Agent/Skill 개발과 판단·재계획 Demo를 우선한다. 첫 구현은 Python/FastAPI, 정적 웹 화면, ESP32 Arduino와 USB 통신을 기본값으로 사용한다.
 소프트웨어는 모의 입력으로 개발하고 전자팀의 실측이 준비되면 같은 인터페이스의 실제 입력으로 연결한다.
 
