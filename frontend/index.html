@@ -12,6 +12,7 @@
     <p class="eyebrow">TOUCHBACK · 실행 화면</p>
     <h1>조작한 뒤, 실제 결과를 확인하세요</h1>
     <p>사용자가 직접 인덕션을 조작합니다. 화면은 서버가 보고한 안내와 관측 결과를 보여줍니다.</p>
+    <button id="large-text" type="button" class="secondary" aria-pressed="false">큰 글씨 켜기</button>
   </header>
   <section class="card" aria-labelledby="input-title">
     <h2 id="input-title">1. 목표 입력</h2>
@@ -34,10 +35,15 @@
     <div class="badges"><strong id="origin">서버 연결 대기</strong><span id="mode">실행 방식: 확인 전</span><span id="run-id">실행 ID: 없음</span></div>
     <p id="status" class="status" role="status" aria-live="polite">목표를 입력해 실행하세요.</p>
     <p id="error" class="error" role="alert" hidden></p>
-    <h3>현재 안내</h3>
-    <p id="instruction">아직 안내가 없습니다.</p>
+    <div class="guide" aria-labelledby="guide-title">
+      <p id="phase" class="phase">시작 전</p>
+      <h3 id="guide-title">지금 할 일</h3>
+      <p id="instruction" class="instruction">아직 안내가 없습니다.</p>
+      <p id="phase-detail" class="hint">목표를 입력하면 다음 단계가 여기에 표시됩니다.</p>
+    </div>
     <div class="actions"><button id="ack" disabled>조작 완료 알림</button><button id="cancel" class="secondary" disabled>실행 취소</button><button id="retry" class="secondary" disabled>상태 다시 확인</button><button id="repeat" class="secondary" disabled>안내 다시 듣기</button></div>
     <p id="speech-support" class="hint" role="status"></p>
+    <label class="toggle"><input id="auto-speech" type="checkbox" checked> 새 안내 자동 읽기</label>
     <p class="hint">조작 완료 알림은 성공 판정이 아닙니다. 센서 관측과 서버 판정을 기다리세요.</p>
   </section>
   <section class="card" aria-labelledby="result-title">

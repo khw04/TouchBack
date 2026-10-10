@@ -1,5 +1,6 @@
 import { createApi, freshSpeechItems, TERMINAL } from "./api.mjs";
 import { createFixture } from "./fixtures.mjs";
+import { actionFor, phaseFor, verdictLabel } from "./presentation.mjs";
 
 const $ = id => document.getElementById(id);
 const params = new URLSearchParams(location.search);
@@ -49,12 +50,14 @@ function render(run, announce = true) {
   const stateLabel = isFixture && run.status === "succeeded" ? "UI 화면 예시 완료 · 서버 판정 없음"
     : run.execution_mode === "backend_stub" && run.status === "succeeded" ? "백엔드 스텁 응답 오류 · 성공 근거 없음"
     : statusText[run.status] || run.status || "상태 확인 중";
-  $("status").textContent = `${stateLabel} · 입력 출처: ${sourceText[run.source] || run.source || "확인 전"}`;
-  $("instruction").textContent = run.instruction?.text || "현재 조작 안내가 없습니다.";
-  const verdict = run.verdict;
-  $("verdict").textContent = verdict
-    ? `${isFixture ? "화면 예시 결과" : "서버 판정"}: ${verdict.status || "확인 필요"} · 근거 코드: ${(verdict.reason_codes || []).join(", ") || "없음"}`
-    : "서버 판정을 기다리는 중입니다.";
+  const nextStatus = `${stateLabel} · 입력 출처: ${sourceText[run.source] || run.source || "확인 전"}`;
+  // Repeated polls should not retrigger the screen reader's live region.
+  if ($("status").textContent !== nextStatus) $("status").textContent = nextStatus;
+  const [phase, detail] = phaseFor(run);
+  $("phase").textContent = phase;
+  $("phase-detail").textContent = detail;
+  $("instruction").textContent = actionFor(run);
+  $("verdict").textContent = verdictLabel(run);
   const items = Array.isArray(run.events) ? run.events : [];
   $("events").replaceChildren();
   if (!items.length) {
@@ -68,7 +71,10 @@ function render(run, announce = true) {
   }
   const speech = freshSpeechItems(state.seen, run);
   speech.ids.forEach(id => state.seen.add(id));
-  if (announce && speech.messages.length) speak(speech.messages.at(-1).message);
+  if (speech.messages.length) {
+    state.lastSpoken = speech.messages.at(-1).message;
+    if (announce && $("auto-speech").checked) speak(state.lastSpoken);
+  }
   if (TERMINAL.has(run.status)) stopPolling();
   controls();
 }
@@ -116,7 +122,16 @@ $("cancel").addEventListener("click", () => transact(async () => {
   render(await api.get(state.runId));
 }));
 $("repeat").addEventListener("click", () => speak(state.lastSpoken));
+$("auto-speech").addEventListener("change", () => {
+  if (!$("auto-speech").checked && speechAvailable) speechSynthesis.cancel();
+});
+$("large-text").addEventListener("click", () => {
+  const enabled = document.documentElement.classList.toggle("large-text");
+  $("large-text").setAttribute("aria-pressed", String(enabled));
+  $("large-text").textContent = enabled ? "큰 글씨 끄기" : "큰 글씨 켜기";
+});
 $("retry").addEventListener("click", async () => { await refresh(); if (state.run && !TERMINAL.has(state.run.status) && !state.polling) startPolling(); });
 $("speech-support").textContent = speechAvailable ? "음성 안내 사용 가능. 안내 다시 듣기 버튼을 사용할 수 있습니다." : "이 브라우저는 음성 안내를 지원하지 않습니다. 화면의 안내 문구를 확인하세요.";
+if (!speechAvailable) { $("auto-speech").checked = false; $("auto-speech").disabled = true; }
 if (fixtureMode) $("origin").textContent = "UI FIXTURE · 서버 판정 없음";
 controls();

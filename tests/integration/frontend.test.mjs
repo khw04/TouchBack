@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createApi, ApiError, freshSpeechItems } from "../../frontend/api.mjs";
 import { createFixture } from "../../frontend/fixtures.mjs";
+import { actionFor, phaseFor, verdictLabel } from "../../frontend/presentation.mjs";
 
 test("minimum runs contract uses one request per action and carries source", async () => {
   const calls = [];
@@ -54,4 +55,19 @@ test("UI fixture reports uncertain and never server success", async () => {
   assert.equal(result.status, "uncertain");
   assert.equal(result.verdict.reason_codes[0], "UI_FIXTURE_ONLY");
   assert.equal(result.events.at(-1).source, "ui_fixture");
+});
+
+test("guided phase names actions without treating uncertain as progress success", () => {
+  assert.deepEqual(phaseFor({ status: "awaiting_user" }), ["2/3 · 사용자 조작", "현재 안내를 듣고 직접 조작한 뒤 완료 알림을 누르세요."]);
+  assert.match(phaseFor({ status: "recovering" })[1], /다시 조작하지 마세요/);
+  assert.match(phaseFor({ status: "uncertain" })[0], /확인 불가/);
+  assert.equal(actionFor({ status: "uncertain" }), "인덕션 상태를 직접 확인하세요.");
+});
+
+test("fixture and backend stub cannot claim success in verdict panel", () => {
+  for (const execution_mode of ["ui_fixture", "backend_stub"]) {
+    const run = { status: "succeeded", execution_mode, verdict: { status: "succeeded", reason_codes: [] } };
+    assert.match(phaseFor(run)[0], /성공 근거 없음/);
+    assert.match(verdictLabel(run), /성공 근거 없음/);
+  }
 });

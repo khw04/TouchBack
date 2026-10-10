@@ -19,6 +19,15 @@ button:disabled { opacity: .52; cursor: not-allowed; }
 .badges { display: flex; flex-wrap: wrap; gap: 8px; }
 .badges > * { background: #e9f4ee; border-radius: 6px; padding: 8px; font-size: .92rem; }
 .status { font-size: 1.2rem; font-weight: 800; padding: 12px; background: #eaf2fb; border-left: 5px solid #236cac; }
+.guide { margin-top: 18px; padding: 18px 20px; border: 2px solid #075e4a; border-radius: 12px; background: #f2faf5; }
+.guide h3 { margin-top: 6px; }
+.phase { font-weight: 800; color: #075e4a; margin: 0; }
+.instruction { font-size: 1.35rem; line-height: 1.55; font-weight: 750; margin: 8px 0; }
+.toggle { display: flex; align-items: center; gap: 10px; width: fit-content; cursor: pointer; }
+.toggle input { width: 22px; height: 22px; accent-color: #075e4a; }
+.large-text { font-size: 125%; }
+.large-text .instruction { font-size: 1.5rem; }
+.large-text button, .large-text textarea, .large-text select { font-size: 1.1rem; }
 .error { color: #7d190e; background: #fff1ed; border: 2px solid #b83923; border-radius: 8px; padding: 12px; font-weight: 700; }
 .hint { color: #45564d; }
 li { padding: 8px 0; overflow-wrap: anywhere; }
