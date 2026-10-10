@@ -171,3 +171,18 @@ def test_sequence_gap_resets_clock_confirmation_samples():
     collect(adapter)
     assert adapter.read_baseline("right").clock_quality == "unverified"
     assert "clock_unverified" in adapter.check_sensor_integrity().reasons
+
+
+def test_conflicting_duplicate_invalidates_followup_and_integrity():
+    first = device(seq=1)
+    conflict = first.model_copy(deep=True)
+    conflict.field_summary = {"rms": 999.0, "unit": "adc_count", "sample_count": 500, "sample_rate_hz": 1000, "method": "ac_rms_v1"}
+    from app.contracts.models import FieldSummary
+    conflict.field_summary = FieldSummary.model_validate(conflict.field_summary)
+    adapter = MockAdapter([ScheduledObservation(1500, first), ScheduledObservation(1600, conflict)])
+    result = collect(adapter)
+    assert len(result) == 1
+    assert result[0].device_observation.quality.status == "invalid"
+    assert result[0].device_observation.quality.reasons == ["conflicting_duplicate"]
+    assert adapter.check_sensor_integrity().status == "invalid"
+    assert adapter.check_sensor_integrity().reasons == ["conflicting_duplicate"]

@@ -216,3 +216,26 @@ def test_invalid_or_real_source_profile_rejected(changes):
 def test_open_action_window_cannot_be_evaluated_as_complete():
     with pytest.raises(ValidationError):
         ActionContext(run_id="run-1", action_id="action-1", window_start_ms=500, window_end_ms=3500, now_ms=1500)
+
+
+def test_mock_transport_conflicting_duplicate_cannot_produce_success():
+    from app.adapters.mock import MockAdapter, ScheduledObservation
+    goal, baseline, observations, context, calibration = setup()
+    schedule = []
+    for seq in range(5):
+        d = baseline.device_observation.model_copy(deep=True)
+        d.seq = seq
+        d.window_start_ms, d.window_end_ms = seq * 100, (seq + 1) * 100
+        schedule.append(ScheduledObservation((seq + 1) * 100, d))
+    followup = observations[0].device_observation.model_copy(deep=True)
+    conflicting = followup.model_copy(deep=True)
+    conflicting.field_summary.rms = 140.0
+    schedule.extend([ScheduledObservation(1500, followup), ScheduledObservation(1600, conflicting)])
+    adapter = MockAdapter(schedule)
+    baseline = adapter.read_baseline("right")
+    after = adapter.await_touch_result(run_id=context.run_id, action_id=context.action_id, zone_id="right",
+                                      window_start_ms=500, window_end_ms=3500)
+    result = verify_intent(goal, baseline, after, context, calibration)
+    assert result.status == "uncertain"
+    assert result.goal_satisfied is None
+    assert "sensor_quality_invalid" in result.reason_codes
