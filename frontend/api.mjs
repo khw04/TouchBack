@@ -3,6 +3,7 @@ const STATUSES = new Set(["planning", "awaiting_clarification", "awaiting_user",
 const MODES = new Set(["backend_stub", "mock_llm", "real_llm"]);
 const SOURCES = new Set(["mock", "replay", "live"]);
 const EVENT_KINDS = new Set(["plan", "instruction", "tool_call", "observation", "verdict", "recovery", "error"]);
+const VERDICT_STATUSES = new Set(["success", "mismatch", "uncertain"]);
 
 export class ApiError extends Error {
   constructor(message, code = "connection", status = 0) {
@@ -38,7 +39,7 @@ export function validateRun(data, expectedId) {
     invalid("조작 안내의 ID 또는 내용이 없습니다.");
   }
   if (data.status === "awaiting_user" && !data.instruction) invalid("사용자 조작 대기 상태에 안내가 없습니다.");
-  if (data.verdict !== null && (!record(data.verdict) || !filled(data.verdict.status) ||
+  if (data.verdict !== null && (!record(data.verdict) || !VERDICT_STATUSES.has(data.verdict.status) ||
       !Array.isArray(data.verdict.reason_codes) || !Array.isArray(data.verdict.evidence_ids))) {
     invalid("판정 정보가 불완전합니다.");
   }
@@ -81,23 +82,30 @@ export function createApi(baseUrl = "", fetchImpl = fetch) {
     start: async (user_input, source, zone_id) => validateStart(await request("/api/runs", "POST", { user_input, source, zone_id })),
     get: async runId => validateRun(await request(`/api/runs/${encodeURIComponent(runId)}`), runId),
     ack: async (runId, actionId) => validateAction(await request(`/api/runs/${encodeURIComponent(runId)}/ack`, "POST", { action_id: actionId }), runId, true),
-    cancel: async runId => validateAction(await request(`/api/runs/${encodeURIComponent(runId)}/cancel`, "POST"), runId),
+    cancel: async runId => {
+      const response = validateAction(await request(`/api/runs/${encodeURIComponent(runId)}/cancel`, "POST"), runId);
+      if (response.status !== "stopped") invalid("취소 요청 뒤 종료 상태가 아닙니다.");
+      return response;
+    },
   };
 }
 
 export function freshSpeechItems(previousIds, run, successClaimable = true) {
   const events = Array.isArray(run.events) ? run.events : [];
   const fresh = events.filter(event => event?.event_id && !previousIds.has(event.event_id));
-  const messages = fresh.filter(event => ["instruction", "recovery", "verdict", "error"].includes(event.kind) && event.message &&
-    !(event.kind === "instruction" && event.action_id && previousIds.has(`action:${event.action_id}`)))
+  const currentActionId = run.status === "awaiting_user" ? run.instruction?.action_id : null;
+  const messages = fresh.filter(event => event.message && (
+    (["instruction", "recovery"].includes(event.kind) && currentActionId &&
+      event.action_id === currentActionId && !previousIds.has(`action:${currentActionId}`)) ||
+    ["verdict", "error"].includes(event.kind)))
     .map(event => run.status === "succeeded" && !successClaimable && event.kind === "verdict"
       ? { ...event, message: "서버의 성공 근거가 부족합니다. 인덕션 상태를 직접 확인하세요." } : event);
   // The current instruction can arrive before its event. Its action ID is the stable fallback key.
-  if (run.instruction?.action_id && run.instruction.text &&
-      !previousIds.has(`action:${run.instruction.action_id}`) &&
-      !messages.some(event => event.action_id === run.instruction.action_id)) {
-    messages.push({ event_id: `action:${run.instruction.action_id}`, message: run.instruction.text });
+  if (currentActionId && run.instruction.text &&
+      !previousIds.has(`action:${currentActionId}`) &&
+      !messages.some(event => event.action_id === currentActionId)) {
+    messages.push({ event_id: `action:${currentActionId}`, message: run.instruction.text });
   }
   return { ids: fresh.map(event => event.event_id).concat(
-    run.instruction?.action_id ? [`action:${run.instruction.action_id}`] : []), messages };
+    currentActionId ? [`action:${currentActionId}`] : []), messages };
 }

@@ -6,6 +6,7 @@ import { actionFor, claimableSuccess, phaseFor, unverifiedSnapshot, verdictLabel
 import { eventChange, eventLabel, eventSource } from "../../frontend/events.mjs";
 import { canSendAction, connectionLabel } from "../../frontend/connection.mjs";
 import { evidenceReport, evidenceFilename } from "../../frontend/evidence.mjs";
+import { createReadGate, regressesTerminalState } from "../../frontend/read-gate.mjs";
 
 test("minimum runs contract uses one request per action and carries source", async () => {
   const calls = [];
@@ -14,6 +15,7 @@ test("minimum runs contract uses one request per action and carries source", asy
     const response = options.method === "GET" ? { run_id: "r1", status: "planning", execution_mode: "backend_stub",
       source: "mock", instruction: null, verdict: null, events: [] }
       : url.endsWith("/ack") ? { run_id: "r1", status: "observing", accepted: true }
+      : url.endsWith("/cancel") ? { run_id: "r1", status: "stopped" }
       : { run_id: "r1", status: "planning", execution_mode: "backend_stub" };
     return { ok: true, json: async () => response };
   };
@@ -37,6 +39,11 @@ test("connection and server errors remain distinct", async () => {
     error => error instanceof ApiError && error.code === "busy" && error.status === 409);
 });
 
+test("cancel response must confirm stopped before the UI trusts it", async () => {
+  const api = createApi("", async () => ({ ok: true, json: async () => ({ run_id: "r1", status: "awaiting_user" }) }));
+  await assert.rejects(api.cancel("r1"), error => error instanceof ApiError && error.code === "invalid_response");
+});
+
 test("invalid or mismatched API run cannot be presented as a current server state", async () => {
   const valid = { run_id: "r1", status: "awaiting_user", execution_mode: "mock_llm", source: "mock",
     instruction: { action_id: "a1", text: "한 번 누르세요" }, verdict: null, events: [] };
@@ -45,6 +52,7 @@ test("invalid or mismatched API run cannot be presented as a current server stat
     { ...valid, run_id: "other" },
     { ...valid, status: "succeeded", execution_mode: "unknown" },
     { ...valid, instruction: null },
+    { ...valid, verdict: { status: "succeeded", reason_codes: [], evidence_ids: [] } },
     { ...valid, events: [{ event_id: "e1", kind: "verdict", message: "완료" }] },
   ]) {
     assert.throws(() => validateRun(bad, "r1"), error => error instanceof ApiError && error.code === "invalid_response");
@@ -66,7 +74,7 @@ test("existing execution lookup only GETs the encoded run ID", async () => {
 });
 
 test("same event and action are spoken only once across polls", () => {
-  const run = { instruction: { action_id: "a1", text: "버튼을 누르세요" }, events: [
+  const run = { status: "awaiting_user", instruction: { action_id: "a1", text: "버튼을 누르세요" }, events: [
     { event_id: "e1", action_id: "a1", kind: "instruction", message: "버튼을 누르세요" },
   ] };
   const seen = new Set();
@@ -77,7 +85,27 @@ test("same event and action are spoken only once across polls", () => {
   run.events.push({ event_id: "e1-late", action_id: "a1", kind: "instruction", message: "버튼을 누르세요" });
   assert.equal(freshSpeechItems(seen, run).messages.length, 0);
   run.events.push({ event_id: "e2", action_id: "a2", kind: "recovery", message: "상태를 확인하세요" });
+  run.instruction = { action_id: "a2", text: "상태를 확인하세요" };
   assert.deepEqual(freshSpeechItems(seen, run).messages.map(item => item.message), ["상태를 확인하세요"]);
+});
+
+test("old instruction is neither shown nor spoken after leaving the action state", () => {
+  const instruction = { action_id: "a1", text: "오른쪽 + 버튼을 누르세요" };
+  for (const status of ["observing", "recovering", "stopped", "uncertain", "failed"]) {
+    const run = { status, instruction, events: [
+      { event_id: "e1", action_id: "a1", kind: "instruction", message: instruction.text },
+    ] };
+    assert.doesNotMatch(actionFor(run), /\+ 버튼을 누르세요/);
+    assert.deepEqual(freshSpeechItems(new Set(), run).messages, []);
+  }
+});
+
+test("only the current action can be spoken after recovery", () => {
+  const run = { status: "awaiting_user", instruction: { action_id: "a2", text: "새 안내" }, events: [
+    { event_id: "e1", action_id: "a1", kind: "instruction", message: "지난 버튼을 누르세요" },
+    { event_id: "e2", action_id: "a2", kind: "recovery", message: "새 안내" },
+  ] };
+  assert.deepEqual(freshSpeechItems(new Set(), run).messages.map(item => item.message), ["새 안내"]);
 });
 
 test("UI fixture reports uncertain and never server success", async () => {
@@ -142,10 +170,43 @@ test("guided phase names actions without treating uncertain as progress success"
 
 test("fixture and backend stub cannot claim success in verdict panel", () => {
   for (const execution_mode of ["ui_fixture", "backend_stub"]) {
-    const run = { status: "succeeded", execution_mode, verdict: { status: "succeeded", reason_codes: [] } };
+    const run = { status: "succeeded", execution_mode, verdict: { status: "success", verification_level: "exact_step",
+      goal_satisfied: true, evidence_ids: ["obs-1"], reason_codes: [] } };
+    assert.equal(claimableSuccess(run), false);
     assert.match(phaseFor(run)[0], /성공 근거 부족/);
     assert.match(verdictLabel(run), /성공 근거 부족/);
   }
+  assert.equal(claimableSuccess({ status: "succeeded", execution_mode: "real_llm", verdict: {
+    status: "succeeded", verification_level: "exact_step", goal_satisfied: true, evidence_ids: ["obs-1"],
+  } }), false);
+});
+
+test("late and overlapping reads cannot undo a newer run state", async () => {
+  let runId = "run-1";
+  const gate = createReadGate(() => runId);
+  let finishOld;
+  const oldResponse = new Promise(resolve => { finishOld = resolve; });
+  const old = gate.fetch(runId, () => oldResponse);
+  assert.equal((await gate.fetch(runId, async () => ({ status: "awaiting_user" }))).kind, "overlap");
+
+  gate.invalidate(); // cancel or ack started after the GET
+  const current = await gate.fetch(runId, async () => ({ status: "stopped" }));
+  assert.equal(current.kind, "current");
+  assert.equal(current.value.status, "stopped");
+  finishOld({ status: "awaiting_user" });
+  assert.equal((await old).kind, "stale");
+
+  let finishAnother;
+  const another = gate.fetch(runId, () => new Promise(resolve => { finishAnother = resolve; }));
+  runId = "run-2";
+  gate.invalidate();
+  assert.equal((await gate.fetch(runId, async () => ({ status: "planning" }))).kind, "current");
+  finishAnother({ status: "awaiting_user" });
+  assert.equal((await another).kind, "stale");
+  assert.equal(regressesTerminalState({ run_id: "run-1", status: "stopped" },
+    { run_id: "run-1", status: "awaiting_user" }), true);
+  assert.equal(regressesTerminalState({ run_id: "run-1", status: "stopped" },
+    { run_id: "run-2", status: "awaiting_user" }), false);
 });
 
 test("server success needs exact step, goal match and evidence before being announced", () => {

@@ -13,7 +13,7 @@ const phases = {
 export function claimableSuccess(run) {
   const verdict = run?.verdict;
   return run?.status === "succeeded" && !["ui_fixture", "backend_stub"].includes(run.execution_mode) &&
-    ["success", "succeeded"].includes(verdict?.status) && verdict.verification_level === "exact_step" &&
+    verdict?.status === "success" && verdict.verification_level === "exact_step" &&
     verdict.goal_satisfied === true && Array.isArray(verdict.evidence_ids) && verdict.evidence_ids.length > 0;
 }
 
@@ -31,7 +31,7 @@ export function verdictLabel(run) {
   const fixture = run.execution_mode === "ui_fixture";
   const stub = run.execution_mode === "backend_stub";
   const status = run.status === "succeeded" && !claimableSuccess(run) ? "성공 근거 부족" : ({
-    success: "목표 확인 보고", succeeded: "목표 확인 보고", mismatch: "목표 불일치", uncertain: "확인 불가", stopped: "중단", failed: "실패",
+    success: "목표 확인 보고", mismatch: "목표 불일치", uncertain: "확인 불가",
   })[verdict.status] || verdict.status || "확인 필요";
   const source = fixture ? "화면 예시 결과" : stub ? "백엔드 스텁 응답" : "서버 판정";
   const level = ({ exact_step: "정확한 단계", output_change: "출력 변화", none: "확인 수준 없음" })[verdict.verification_level];
@@ -40,7 +40,7 @@ export function verdictLabel(run) {
 
 export function actionFor(run) {
   if (!run) return "목표를 입력하세요.";
-  if (run.instruction?.text) return run.instruction.text;
+  if (run.status === "awaiting_user" && run.instruction?.text) return run.instruction.text;
   if (run.execution_mode === "ui_fixture" && run.status === "awaiting_clarification" && run.clarification) return run.clarification;
   if (run.status === "succeeded" && !claimableSuccess(run)) {
     return "실제 인덕션 상태를 직접 확인하세요.";

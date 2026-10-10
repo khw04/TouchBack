@@ -1,9 +1,10 @@
-import { createApi, freshSpeechItems, TERMINAL } from "./api.mjs?v=10";
+import { createApi, freshSpeechItems, TERMINAL } from "./api.mjs?v=13";
 import { createFixture } from "./fixtures.mjs?v=9";
-import { actionFor, claimableSuccess, phaseFor, unverifiedSnapshot, verdictLabel } from "./presentation.mjs?v=12";
+import { actionFor, claimableSuccess, phaseFor, unverifiedSnapshot, verdictLabel } from "./presentation.mjs?v=13";
 import { eventChange, eventLabel, eventSource } from "./events.mjs";
 import { canSendAction, connectionLabel } from "./connection.mjs";
 import { evidenceReport, evidenceFilename } from "./evidence.mjs";
+import { createReadGate, regressesTerminalState } from "./read-gate.mjs";
 
 const $ = id => document.getElementById(id);
 const params = new URLSearchParams(location.search);
@@ -11,6 +12,7 @@ const fixtureMode = params.get("fixture") === "1";
 const api = fixtureMode ? createFixture() : createApi(params.get("api") || "");
 const state = { runId: null, run: null, busy: false, connection: "unknown", lastConfirmedAt: null,
   startUnknown: false, seen: new Set(), renderedEventIds: [], lastSpoken: "", polling: null, submittedRequest: null };
+const reads = createReadGate(() => state.runId);
 const statusText = {
   planning: "계획 중", awaiting_clarification: "추가 확인 필요", awaiting_user: "사용자 조작 대기",
   observing: "센서 관측 중", recovering: "복구 안내 준비 중", succeeded: "서버 판정: 목표 확인",
@@ -30,7 +32,7 @@ function controls() {
   $("ack").disabled = state.busy || !writable || !run?.instruction?.action_id || run.status !== "awaiting_user";
   $("cancel").disabled = state.busy || !writable || !run || TERMINAL.has(run.status);
   $("retry").disabled = state.busy || !state.runId || fixtureMode;
-  $("repeat").disabled = !speechAvailable || !state.lastSpoken || (!fixtureMode && ["offline", "invalid", "unverified"].includes(state.connection));
+  $("repeat").disabled = state.busy || !speechAvailable || !state.lastSpoken || (!fixtureMode && ["offline", "invalid", "unverified"].includes(state.connection));
   $("resume").disabled = fixtureMode || state.busy || Boolean(run && !TERMINAL.has(run.status));
   $("export-evidence").setAttribute("aria-disabled", String(!run?.run_id));
   if (run?.run_id) $("export-evidence").setAttribute("href", "#");
@@ -123,6 +125,12 @@ function renderEvents(items) {
   state.renderedEventIds = change.ids;
 }
 function render(run, announce = true) {
+  const previousAction = state.run?.status === "awaiting_user" ? state.run.instruction?.action_id : null;
+  const currentAction = run.status === "awaiting_user" ? run.instruction?.action_id : null;
+  if (previousAction && previousAction !== currentAction) {
+    if (speechAvailable) speechSynthesis.cancel();
+    state.lastSpoken = "";
+  }
   state.run = run;
   state.runId = run.run_id;
   if (!fixtureMode) { state.connection = "online"; state.lastConfirmedAt = Date.now(); }
@@ -157,8 +165,19 @@ function render(run, announce = true) {
 function stopPolling() { if (state.polling) clearInterval(state.polling); state.polling = null; }
 async function refresh(allowBusy = false) {
   if (!state.runId || state.busy && !allowBusy) return false;
-  try { render(await api.get(state.runId)); clearError(); return true; }
-  catch (error) {
+  const outcome = await reads.fetch(state.runId, id => api.get(id));
+  if (outcome.kind === "current") {
+    if (regressesTerminalState(state.run, outcome.value)) {
+      markUnverified("서버가 종료된 실행의 이전 상태를 반환했습니다. 상태를 다시 확인하세요.");
+      stopPolling();
+      return false;
+    }
+    render(outcome.value);
+    clearError();
+    return true;
+  }
+  if (outcome.kind === "error") {
+    const { error } = outcome;
     stopPolling();
     if (error.code === "connection") {
       markOffline(`상태 조회 실패: ${error.message} 마지막 화면은 현재 상태가 아닐 수 있습니다.`);
@@ -167,8 +186,8 @@ async function refresh(allowBusy = false) {
     } else {
       markUnverified(`상태 확인 실패: ${error.message} 서버의 실행 ID를 확인하세요.`);
     }
-    return false;
   }
+  return false;
 }
 function startPolling() {
   stopPolling();
@@ -187,6 +206,7 @@ $("goal-form").addEventListener("submit", event => {
   transact(async () => {
     const input = $("user-input").value.trim();
     if (!input) throw new Error("목표를 입력하세요.");
+    reads.invalidate();
     stopPolling(); state.seen.clear(); state.renderedEventIds = []; state.lastSpoken = "";
     let run;
     const request = { user_input: input, source: $("source").value, zone_id: $("zone").value || null };
@@ -244,6 +264,7 @@ $("resume-form").addEventListener("submit", event => {
       throw new Error("조회할 실행 ID를 입력하세요.");
     }
     $("resume-id").removeAttribute("aria-invalid");
+    reads.invalidate();
     let run;
     try { run = await api.get(runId); }
     catch (error) {
@@ -264,6 +285,7 @@ $("resume-form").addEventListener("submit", event => {
 $("ack").addEventListener("click", () => transact(async () => {
   const actionId = state.run?.instruction?.action_id;
   if (!actionId) return;
+  reads.invalidate();
   $("ack").disabled = true;
   try { await api.ack(state.runId, actionId); }
   catch (error) {
@@ -273,10 +295,15 @@ $("ack").addEventListener("click", () => transact(async () => {
   if (!await refresh(true)) return;
 }));
 $("cancel").addEventListener("click", () => transact(async () => {
-  try { await api.cancel(state.runId); }
+  reads.invalidate();
+  let canceled;
+  try { canceled = await api.cancel(state.runId); }
   catch (error) {
     markUnverified(`취소 결과를 확인할 수 없습니다. 상태 다시 확인을 누르세요. ${error.message}`);
     return;
+  }
+  if (canceled.status === "stopped" && state.run?.run_id === state.runId) {
+    render({ ...state.run, status: "stopped", instruction: null, verdict: null }, false);
   }
   if (!await refresh(true)) return;
 }));
