@@ -44,3 +44,7 @@ GitHub 원격: https://github.com/khw04/TouchBack (공개). main은 팀원 최�
 ## 의도 검증 실행
 
 [의도 검증 Skill](skills/intent-output-verification/SKILL.md)에 Mock 정상/변화 없음/센서 오류의 실행 예제를 제공한다. 검증 함수는 결정론적이며 실제 LLM Agent·복구·실측의 완료를 뜻하지 않는다.
+
+## 보정과 상태 준비
+
+[보정과상태](docs/보정과상태.md)에 개발 자료의 보정 후보 생성과 Mock 화구별 단계/재동기화·재보정 흐름을 정리했다. 실제 데이터와 live 활성화·다기종/냄비·확장 특징 검증은 미완료다.
