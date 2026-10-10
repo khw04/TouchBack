@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>TouchBack 실행 화면</title>
-  <link rel="stylesheet" href="./style.css">
+  <link rel="stylesheet" href="./style.css?v=4">
 </head>
 <body>
 <main>
@@ -27,12 +27,28 @@
           <select id="zone"><option value="right">오른쪽</option><option value="left">왼쪽</option><option value="">입력에서 해석</option></select>
         </label>
       </div>
+      <div id="fixture-options" class="fixture-options" hidden>
+        <label for="fixture-scenario">화면 연습 시나리오</label>
+        <select id="fixture-scenario">
+          <option value="normal">정상 흐름 예시</option>
+          <option value="recovery">미인식 후 복구 예시</option>
+          <option value="sensor_error">센서 오류 예시</option>
+        </select>
+        <p class="hint">세 시나리오 모두 화면 동작만 재현합니다. 위의 입력 출처 선택은 연습 설정값이며 실제 센서 입력이나 Agent 판정은 없습니다.</p>
+      </div>
       <button id="start" type="submit">실행 시작</button>
+    </form>
+    <form id="resume-form" class="resume-form" hidden>
+      <h3>기존 실행 다시 확인</h3>
+      <label for="resume-id">실행 ID</label>
+      <div class="resume-controls"><input id="resume-id" type="text" autocomplete="off" placeholder="서버가 발급한 실행 ID"><button id="resume" type="submit" class="secondary">실행 ID 조회</button></div>
+      <p class="hint">화면을 새로 열었을 때 사용하세요. 새 실행을 만들지 않고 서버 상태만 조회합니다.</p>
     </form>
   </section>
   <section class="card" aria-labelledby="state-title">
     <h2 id="state-title">2. 실행 상태</h2>
-    <div class="badges"><strong id="origin">서버 연결 대기</strong><span id="mode">실행 방식: 확인 전</span><span id="run-id">실행 ID: 없음</span></div>
+    <div class="badges"><strong id="origin">서버 연결 대기</strong><span id="mode">실행 방식: 확인 전</span><span id="run-id">실행 ID: 없음</span><span id="fixture-active" hidden></span></div>
+    <div class="connection-line"><p id="connection" role="status" aria-live="polite">서버 연결 확인 전</p><p id="last-confirmed">마지막 상태 확인: 없음</p></div>
     <p id="status" class="status" role="status" aria-live="polite">목표를 입력해 실행하세요.</p>
     <p id="error" class="error" role="alert" hidden></p>
     <div class="guide" aria-labelledby="guide-title">
@@ -49,10 +65,14 @@
   <section class="card" aria-labelledby="result-title">
     <h2 id="result-title">3. 판정과 근거</h2>
     <p id="verdict">서버 판정을 기다리는 중입니다.</p>
-    <h3>실행 기록</h3>
+    <div class="export-line"><a id="export-evidence" class="button secondary" aria-disabled="true">실행 기록 JSON 저장</a><p class="hint">현재 화면의 실행 기록을 파일로 저장합니다. 실제 장치 검증 증거는 별도로 기록하세요.</p></div>
+    <p id="export-note" class="hint" role="status" aria-live="polite"></p>
+    <details id="evidence-preview" hidden><summary>JSON 내용 보기·복사</summary><pre id="evidence-json"></pre></details>
+    <h3>실행 기록 <span id="event-count" class="count">0건</span></h3>
+    <p class="hint">기록의 제목과 내용을 먼저 읽고, 필요한 경우 ‘근거 자세히 보기’를 펼치세요.</p>
     <ol id="events" aria-label="실행 기록"><li>아직 기록이 없습니다.</li></ol>
   </section>
 </main>
-<script type="module" src="./app.mjs"></script>
+<script type="module" src="./app.mjs?v=12"></script>
 </body>
 </html>
