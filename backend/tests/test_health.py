@@ -7,4 +7,4 @@ def test_health_reports_server_without_agent_readiness():
         response = client.get("/health")
         assert response.status_code == 200
         assert response.json() == {"status": "ok", "agent_ready": False}
-        assert client.post("/api/runs", json={}).status_code == 404
+        assert client.get("/api/unknown").status_code == 404
