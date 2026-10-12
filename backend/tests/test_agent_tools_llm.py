@@ -10,8 +10,14 @@ from app.llm.factory import get_llm_provider
 from app.llm.mock_provider import MockLlmProvider
 from app.llm.openai_provider import MissingApiKeyError, OpenAiProvider
 from app.tools.base import BaseTool, ToolRegistry, ToolResult
-from app.tools.registry import default_tool_registry
-from app.tools.sensor_tools import AwaitTouchResultTool, CheckSensorIntegrityTool, ReadFieldTool
+from app.tools.registry import create_mock_registry, default_tool_registry
+from app.tools.sensor_tools import (
+    AwaitTouchResultTool,
+    CheckSensorIntegrityTool,
+    MockSensorAdapter,
+    ReadFieldTool,
+    create_mock_sensor_tools,
+)
 
 
 def test_config_env_parser_and_precedence(tmp_path: Path):
@@ -35,33 +41,63 @@ def test_config_env_parser_and_precedence(tmp_path: Path):
             os.environ.pop("OPENAI_API_KEY", None)
 
 
-def test_sensor_tools_execution():
+def test_sensor_tools_unconfigured_error():
+    """Provider가 설정되지 않은 센서 도구는 고정 성공 대신 명시적 오류/불확실을 반환해야 함 (P1 피드백)."""
     async def _run():
-        # 1. read_field
+        # 1. read_field without provider
         tool_field = ReadFieldTool()
         res1 = await tool_field.execute(zone_id="right")
-        assert res1.success is True
-        assert res1.data["zone_id"] == "right"
-        assert "rms" in res1.data
+        assert res1.success is False
+        assert "센서 어댑터가 설정되지 않았거나" in (res1.error or "")
 
         bad_field = await tool_field.execute(zone_id="center")
         assert bad_field.success is False
 
-        # 2. await_touch_result
+        # 2. await_touch_result without provider
         tool_touch = AwaitTouchResultTool()
         res2 = await tool_touch.execute(action_id="act-test", window_ms=2500)
+        assert res2.success is False
+        assert "센서 어댑터가 설정되지 않았거나" in (res2.error or "")
+
+        # 3. check_sensor_integrity without provider
+        tool_check = CheckSensorIntegrityTool()
+        res3 = await tool_check.execute()
+        assert res3.success is False
+        assert res3.data["connected"] is False
+        assert res3.data["calibrated"] is False
+        assert res3.data["clock_sync"] == "unsynced"
+
+    asyncio.run(_run())
+
+
+def test_mock_sensor_tools_execution():
+    """명시적인 MockSensorAdapter를 주입했을 때의 정상 모의 관측 동작 검증."""
+    async def _run():
+        adapter = MockSensorAdapter(source="mock")
+        tools = create_mock_sensor_tools(adapter)
+        field_tool, touch_tool, check_tool = tools[0], tools[1], tools[2]
+
+        # 1. read_field with mock adapter
+        res1 = await field_tool.execute(zone_id="right")
+        assert res1.success is True
+        assert res1.data["zone_id"] == "right"
+        assert res1.data["source"] == "mock"
+        assert "rms" in res1.data
+
+        # 2. await_touch_result with mock adapter
+        res2 = await touch_tool.execute(action_id="act-test", window_ms=2500)
         assert res2.success is True
         assert res2.data["action_id"] == "act-test"
         assert res2.data["window_ms"] == 2500
+        assert res2.data["source"] == "mock"
 
-        bad_touch = await tool_touch.execute()
-        assert bad_touch.success is False
-
-        # 3. check_sensor_integrity
-        tool_check = CheckSensorIntegrityTool()
-        res3 = await tool_check.execute()
+        # 3. check_sensor_integrity with mock adapter
+        res3 = await check_tool.execute()
         assert res3.success is True
         assert res3.data["connected"] is True
+        assert res3.data["calibrated"] is True
+        assert res3.data["clock_sync"] == "verified"
+        assert res3.data["source"] == "mock"
 
     asyncio.run(_run())
 
