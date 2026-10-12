@@ -3,7 +3,7 @@
 검증 환경: Windows, Python 3.12.14. Python 3.12를 사용한다.
 공통 타입은 `app/contracts/models.py`에서 가져온다. 관측 v0.2, Goal/Verdict/RunEvent와 실행 API 요청·응답 형식만 구현했다.
 `/health`는 서버 구동 확인이며 `agent_ready: false`를 반환한다.
-실행 API, 상태 머신, Verifier, Skill, 실제 LLM과 .env 로딩은 후속 티켓이다. C-KH-02의 MockAdapter는 [Mock관측](../docs/Mock관측.md)에 사용법과 한계를 정리했다.
+실행 API, 상태 머신, 실제 LLM과 .env 로딩은 후속 티켓이다. C-KH-03 Mock 범위의 Verifier와 [의도 검증 Skill](../skills/intent-output-verification/SKILL.md)은 별도 구현했으며 Agent Tool 등록과 실측 보정은 미완료다. C-KH-02의 MockAdapter는 [Mock관측](../docs/Mock관측.md)에 사용법과 한계를 정리했다.
 
 ## 설치와 실행 (PowerShell, 저장소 루트에서)
 

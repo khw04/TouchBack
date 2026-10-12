@@ -43,7 +43,7 @@ quality = adapter.check_sensor_integrity()
 | sensor_error | 자기장·비프음 null, 품질 invalid/disconnected |
 
 모든 수치는 테스트 값이다. 설정 이름·평가 정답·예상 판정은 반환 관측에 들어가지 않는다.
-`mock-test-v1`은 테스트용 보정 식별자만 제공한다. 아직 단계 보정 파일/Verifier가 없어 정확 단계 성공 근거가 아니다.
+`mock-test-v1`은 테스트용 보정 식별자만 제공한다. C-KH-03에서 이 ID와 대응하는 명시적 Mock 보정 파일/Verifier를 추가했다. ID만으로 성공을 선언하지 않으며 보정·관측·시간 검사를 통과해야 한다. 실제 단계 보정 근거는 아니다.
 
 ## 시간과 입력 무결성
 
