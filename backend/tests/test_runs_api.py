@@ -253,6 +253,15 @@ def test_validation_error_format():
     assert "요청 형식" in err["message"]
 
 
+@pytest.mark.parametrize("user_input", ["화력 올려주지 마", "화력 1단 증가시키지 마", "화력 안 올려줘", "화력 2단 올려줘", "화력 두 단계 올려줘"])
+def test_negated_or_out_of_scope_goal_requires_clarification(user_input):
+    response = client.post("/api/runs", json={"user_input": user_input, "source": "mock", "zone_id": "right"})
+    assert response.status_code == 201
+    result = client.get("/api/runs/" + response.json()["run_id"]).json()
+    assert result["status"] == "awaiting_clarification"
+    assert result["instruction"] is None
+
+
 def test_run_step_unconfigured_sensor_returns_uncertain():
     """기본 미설정 센서 환경에서 step 호출 시 안전하게 uncertain 판정 및 락 해제 (C-YD-02)."""
     create_res = client.post("/api/runs", json={"user_input": "화력 1단 올려줘", "source": "mock", "zone_id": "right"})
@@ -283,7 +292,6 @@ def test_run_step_with_mock_orchestrator_returns_succeeded():
     """Mock 센서 어댑터가 연결된 오케스트레이터로 step 실행 시 정상 1단계 성공 (C-YD-02)."""
     import asyncio
     from app.agent.orchestrator import AgentOrchestrator
-    from app.tools.registry import create_mock_registry
 
     create_res = client.post("/api/runs", json={"user_input": "화력 1단 올려줘", "source": "mock", "zone_id": "right"})
     run_id = create_res.json()["run_id"]
@@ -292,7 +300,7 @@ def test_run_step_with_mock_orchestrator_returns_succeeded():
     client.post(f"/api/runs/{run_id}/ack", json={"action_id": action_id})
 
     # Mock 어댑터 오케스트레이터 주입
-    mock_orch = AgentOrchestrator(tool_registry=create_mock_registry())
+    mock_orch = AgentOrchestrator()
     res = asyncio.run(run_store.execute_observation_step(run_id, orchestrator=mock_orch))
 
     assert res.status == "succeeded"

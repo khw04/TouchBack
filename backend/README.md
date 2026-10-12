@@ -3,7 +3,7 @@
 검증 환경: Windows, Python 3.12.14. Python 3.12를 사용한다.
 공통 타입은 `app/contracts/models.py`에서 가져온다. 관측 v0.2, Goal/Verdict/RunEvent와 실행 API 요청·응답 형식만 구현했다.
 `/health`는 서버 구동 확인이며 `agent_ready: false`를 반환한다.
-실행 API, 상태 머신, MockAdapter, Verifier, Skill, 실제 LLM과 .env 로딩은 후속 티켓이다.
+실행 API, 상태 머신, 실제 LLM과 .env 로딩은 후속 티켓이다. C-KH-03 Mock 범위의 Verifier와 [의도 검증 Skill](../skills/intent-output-verification/SKILL.md)은 별도 구현했으며 Agent Tool 등록과 실측 보정은 미완료다. C-KH-02의 MockAdapter는 [Mock관측](../docs/Mock관측.md)에 사용법과 한계를 정리했다.
 
 ## 설치와 실행 (PowerShell, 저장소 루트에서)
 
@@ -14,7 +14,7 @@ python -m venv .venv
 ```
 
 브라우저에서 http://127.0.0.1:8000/health 또는 http://127.0.0.1:8000/docs 를 연다.
-현재 `/api/runs`는 404다. 모델 API 키가 없어도 서버와 테스트를 실행할 수 있다.
+현재 `/api/runs`는 backend_stub 모드로 POST/GET/ack/cancel을 제공한다. live 출처는 미준비 오류로 거부하고 미지원·부정·다단계 목표는 조작 안내 없이 명확화한다. 실제 Agent·LLM 연결은 후속 작업이다. 모델 API 키가 없어도 서버와 테스트를 실행할 수 있다.
 운영 의존성만 설치할 때는 `backend/requirements.txt`를 사용한다. 개발 파일은 테스트 의존성까지 포함한 고정 버전 목록이다.
 
 ## 검증

@@ -1,5 +1,6 @@
-"""Execution API (C-YD-00): run lifecycle, concurrency lock, timeouts, ack, and cancel."""
+"""Execution API (C-YD-00, C-YD-02, C-YD-03): run lifecycle, concurrency lock, timeouts, ack, cancel, and observation step."""
 from datetime import datetime, timezone
+import re
 import threading
 import uuid
 from typing import Callable, Literal
@@ -8,7 +9,6 @@ from fastapi import APIRouter, status
 from pydantic import BaseModel
 
 from app.agent.orchestrator import AgentOrchestrator
-from app.agent.verifier import IntentVerifier
 from app.contracts.models import (
     AckRequest,
     AckResponse,
@@ -45,8 +45,13 @@ class RunApiException(Exception):
 
 
 def is_supported_p0_goal(user_input: str) -> bool:
-    """P0 지원 목표 여부 검증 (화력 1단 증가만 지원, 감소/종료는 미지원)."""
+    """P0 지원 목표 여부 검증 (화력 1단 증가만 지원, 감소/종료 및 다단계/부정은 미지원)."""
     text = user_input.lower().strip()
+    # 부정/금지 및 P0 범위 밖 단계 요청은 실제 조작으로 변환하지 않는다.
+    if re.search(r"(?:하지|주지|리지|시키지|지)\s*마|말아|말고|않|안\s*(?:올|높|켜|시작|증가)", text):
+        return False
+    if re.search(r"(?:[02-9]\d*|1\d+)\s*(?:단|단계)|(?:두|세|네|다섯|여섯|일곱|여덟|아홉|열)\s*(?:단계|단|번)", text):
+        return False
     unsupported_keywords = [
         "꺼",
         "종료",
@@ -92,6 +97,7 @@ class RunState(BaseModel):
     seen_action_ids: list[str] = []
     last_acked_action_id: str | None = None
     retry_count: int = 0
+    generation: int = 1
     created_at: datetime
     status_updated_at: datetime
 
@@ -145,6 +151,7 @@ class RunStore:
             if elapsed >= TIMEOUT_AWAITING_USER_SECONDS:
                 state.status = "stopped"
                 state.status_updated_at = now
+                state.generation += 1
                 self._add_event(
                     state,
                     kind="plan",
@@ -158,6 +165,7 @@ class RunStore:
             if elapsed >= TIMEOUT_AWAITING_CLARIFICATION_SECONDS:
                 state.status = "stopped"
                 state.status_updated_at = now
+                state.generation += 1
                 self._add_event(
                     state,
                     kind="plan",
@@ -229,6 +237,8 @@ class RunStore:
                 instruction=instruction,
                 current_action_id=current_action_id,
                 seen_action_ids=seen_action_ids,
+                retry_count=0,
+                generation=1,
                 created_at=now,
                 status_updated_at=now,
             )
@@ -316,6 +326,7 @@ class RunStore:
                     state.status = "observing"
                     state.status_updated_at = now
                     state.last_acked_action_id = req.action_id
+                    state.generation += 1
                     self._add_event(
                         state,
                         kind="observation",
@@ -353,6 +364,7 @@ class RunStore:
 
             state.status = "stopped"
             state.status_updated_at = now
+            state.generation += 1
             self._add_event(
                 state,
                 kind="plan",
@@ -369,7 +381,7 @@ class RunStore:
         run_id: str,
         orchestrator: AgentOrchestrator | None = None,
     ) -> RunResponse:
-        """observing 상태의 실행에 대해 관측 수집 및 의도 검증 사이클 1회를 수행합니다."""
+        """observing 상태의 실행에 대해 관측 수집 및 의도 검증 사이클 1회를 원자적으로 수행합니다."""
         with self._lock:
             state = self._runs.get(run_id)
             if not state:
@@ -389,79 +401,114 @@ class RunStore:
             action_id = state.last_acked_action_id or state.current_action_id or "act-unknown"
             zone = state.zone_id or "right"
             goal = Goal(zone_id=zone, direction="increase", requested_steps=1)
+            expected_generation = state.generation
+            expected_action_id = action_id
 
         orch = orchestrator or AgentOrchestrator()
-        verdict, data, feedback = await orch.execute_observation_and_verification(
+        verdict, feedback = await orch.execute_observation_and_verification(
             goal=goal,
             action_id=action_id,
+            run_id=run_id,
         )
 
         with self._lock:
+            current_state = self._runs.get(run_id)
+            if not current_state:
+                raise RunApiException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    code="unknown_run",
+                    message=f"실행 '{run_id}'을(를) 찾을 수 없습니다.",
+                )
+
+            # 원자적 세대 및 상태 유효성 재확인:
+            # await 도중 취소(stopped), 만료, 다른 조작 진행 등으로 세대나 상태가 변경되었으면
+            # 늦은 관측 결과를 무시하고 현재 상태를 덮어쓰지 않는다.
+            if (
+                current_state.status != "observing"
+                or current_state.generation != expected_generation
+                or current_state.last_acked_action_id != expected_action_id
+                or self._active_run_id != run_id
+            ):
+                return RunResponse(
+                    run_id=current_state.run_id,
+                    status=current_state.status,
+                    execution_mode=current_state.execution_mode,
+                    source=current_state.source,
+                    instruction=current_state.instruction,
+                    verdict=current_state.verdict,
+                    events=current_state.events,
+                )
+
             now = self._now_utc()
-            state.verdict = verdict
+            current_state.verdict = verdict
             next_status = orch.determine_next_status(verdict)
 
-            # C-YD-03 오조작 복구 Skill 연계: 변화 없음(mismatch/none) 시 재조작 안내 또는 안전 중단
+            # C-YD-03 오조작 복구 Skill 연계:
+            # 유효한 변화 없음(mismatch/none/no_output_change)인 경우에만 recovering 진입
             if next_status == "recovering":
                 rec_res = orch.handle_recovery(
                     goal=goal,
                     verdict=verdict,
-                    retry_count=state.retry_count,
+                    retry_count=current_state.retry_count,
+                    run_id=run_id,
+                    action_id=action_id,
                 )
                 if rec_res.decision.value == "retry_instruction" and rec_res.instruction is not None:
-                    state.retry_count += 1
-                    state.status = "awaiting_user"
-                    state.instruction = rec_res.instruction
-                    state.current_action_id = rec_res.instruction.action_id
-                    state.seen_action_ids.append(rec_res.instruction.action_id)
-                    state.status_updated_at = now
+                    current_state.retry_count += 1
+                    current_state.status = "awaiting_user"
+                    current_state.instruction = rec_res.instruction
+                    current_state.current_action_id = rec_res.instruction.action_id
+                    current_state.seen_action_ids.append(rec_res.instruction.action_id)
+                    current_state.status_updated_at = now
+                    current_state.generation += 1
 
                     self._add_event(
-                        state,
+                        current_state,
                         kind="observation",
                         action_id=action_id,
-                        message=f"센서 관측 수집 완료 (delta={data.get('field_delta_rms', 0.0)}, beep={data.get('beep_count', 0)})",
+                        message="센서 관측 수집 및 검증 완료",
                         evidence_ids=verdict.evidence_ids,
                     )
                     self._add_event(
-                        state,
+                        current_state,
                         kind="recovery",
                         action_id=rec_res.instruction.action_id,
                         message=rec_res.message,
                         evidence_ids=verdict.evidence_ids,
                     )
                     return RunResponse(
-                        run_id=state.run_id,
-                        status=state.status,
-                        execution_mode=state.execution_mode,
-                        source=state.source,
-                        instruction=state.instruction,
-                        verdict=state.verdict,
-                        events=state.events,
+                        run_id=current_state.run_id,
+                        status=current_state.status,
+                        execution_mode=current_state.execution_mode,
+                        source=current_state.source,
+                        instruction=current_state.instruction,
+                        verdict=current_state.verdict,
+                        events=current_state.events,
                     )
-                elif rec_res.decision.value == "abort_uncertain":
-                    next_status = "uncertain"
-                    if rec_res.updated_verdict:
-                        state.verdict = rec_res.updated_verdict
-                    feedback = rec_res.message
                 elif rec_res.decision.value == "late_success":
                     next_status = "succeeded"
                     if rec_res.updated_verdict:
-                        state.verdict = rec_res.updated_verdict
+                        current_state.verdict = rec_res.updated_verdict
+                    feedback = rec_res.message
+                else:  # abort_uncertain
+                    next_status = "uncertain"
+                    if rec_res.updated_verdict:
+                        current_state.verdict = rec_res.updated_verdict
                     feedback = rec_res.message
 
-            state.status = next_status
-            state.status_updated_at = now
+            current_state.status = next_status
+            current_state.status_updated_at = now
+            current_state.generation += 1
 
             self._add_event(
-                state,
+                current_state,
                 kind="observation",
                 action_id=action_id,
-                message=f"센서 관측 수집 완료 (delta={data.get('field_delta_rms', 0.0)}, beep={data.get('beep_count', 0)})",
+                message="센서 관측 수집 및 검증 완료",
                 evidence_ids=verdict.evidence_ids,
             )
             self._add_event(
-                state,
+                current_state,
                 kind="verdict",
                 action_id=action_id,
                 message=feedback,
@@ -472,13 +519,13 @@ class RunStore:
                 self._active_run_id = None
 
             return RunResponse(
-                run_id=state.run_id,
-                status=state.status,
-                execution_mode=state.execution_mode,
-                source=state.source,
-                instruction=state.instruction,
-                verdict=state.verdict,
-                events=state.events,
+                run_id=current_state.run_id,
+                status=current_state.status,
+                execution_mode=current_state.execution_mode,
+                source=current_state.source,
+                instruction=current_state.instruction,
+                verdict=current_state.verdict,
+                events=current_state.events,
             )
 
 
