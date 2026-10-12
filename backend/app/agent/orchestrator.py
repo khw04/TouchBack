@@ -1,4 +1,4 @@
-"""Agent Orchestrator (C-YD-02): plan, instruct, observe tools, and verify intent."""
+"""Agent Orchestrator (C-YD-02): plan, instruct, observe, and verify intent."""
 from typing import Any
 import uuid
 
@@ -8,16 +8,15 @@ from app.agent.verifier import IntentVerifier, default_verifier
 from app.contracts.models import (
     Goal,
     Instruction,
-    RunEvent,
+    Observation,
     RunStatus,
-    Source,
     Verdict,
     Zone,
 )
 from app.llm.base import BaseLlmProvider
 from app.llm.mock_provider import MockLlmProvider
 from app.tools.base import ToolRegistry
-from app.tools.registry import default_tool_registry
+from app.verification.models import ActionContext
 
 
 class AgentOrchestrator:
@@ -26,14 +25,16 @@ class AgentOrchestrator:
     def __init__(
         self,
         llm_provider: BaseLlmProvider | None = None,
-        tool_registry: ToolRegistry | None = None,
+        adapter: Any | None = None,
         verifier: IntentVerifier | None = None,
         recovery_skill: MisoperationRecoverySkill | None = None,
+        tool_registry: ToolRegistry | None = None,
     ) -> None:
         self.llm = llm_provider or MockLlmProvider()
-        self.tools = tool_registry or default_tool_registry
+        self.adapter = adapter
         self.verifier = verifier or default_verifier
         self.recovery = recovery_skill or default_recovery_skill
+        self.tools = tool_registry
 
     def interpret_goal(
         self,
@@ -68,49 +69,91 @@ class AgentOrchestrator:
         self,
         goal: Goal,
         action_id: str,
-        window_ms: int = 3000,
-    ) -> tuple[Verdict, dict[str, Any], str]:
-        """관측 도구를 실행하고 Verifier를 통해 판정을 도출하며 사용자 피드백 문구를 생성합니다."""
-        # 1. 센서 관측 도구 호출
-        obs_res = await self.tools.execute(
-            "await_touch_result",
-            action_id=action_id,
-            window_ms=window_ms,
-        )
-
+        run_id: str = "run-default",
+        window_start_ms: int = 500,
+        window_end_ms: int = 3500,
+        timeout_ms: int = 3000,
+    ) -> tuple[Verdict, str]:
+        """관측 어댑터에서 신호를 수집하고 verify_intent 계약으로 엄격히 검증합니다."""
         evidence_id = f"ev-{action_id}"
 
-        # 관측 도구 실패 또는 센서 어댑터 미설정
-        if not obs_res.success:
+        if self.adapter is None:
+            # 미설정 센서인 경우 안전하게 uncertain 종료
             verdict = Verdict(
                 status="uncertain",
                 verification_level="none",
                 goal_satisfied=None,
-                reason_codes=[obs_res.error or "sensor_observation_failed"],
+                reason_codes=["sensor_adapter_unconfigured"],
                 evidence_ids=[evidence_id],
             )
             feedback = get_verdict_message("uncertain", "none")
-            return verdict, obs_res.data, feedback
+            return verdict, feedback
 
-        # 2. 의도 검증 수행
-        verdict = self.verifier.verify(
-            goal=goal,
-            observation_data=obs_res.data,
-            evidence_id=evidence_id,
+        # 1. 기준선(baseline) 조회
+        baseline: Observation | None = None
+        if hasattr(self.adapter, "read_baseline"):
+            baseline = self.adapter.read_baseline(goal.zone_id)
+
+        # 2. 터치 관측 결과 수집
+        observations: list[Observation] = []
+        if hasattr(self.adapter, "await_touch_result"):
+            observations = self.adapter.await_touch_result(
+                run_id=run_id,
+                action_id=action_id,
+                zone_id=goal.zone_id,
+                window_start_ms=window_start_ms,
+                window_end_ms=window_end_ms,
+                timeout_ms=timeout_ms,
+            )
+            # 1차 시간창 내 미도착 시 지연 도착 신호 추가 확인
+            if not observations and hasattr(self.adapter, "clock"):
+                late_obs = self.adapter.await_touch_result(
+                    run_id=run_id,
+                    action_id=action_id,
+                    zone_id=goal.zone_id,
+                    window_start_ms=window_start_ms,
+                    window_end_ms=window_end_ms,
+                    timeout_ms=1500,
+                )
+                if late_obs:
+                    observations = late_obs
+
+        # 3. ActionContext 구성
+        now_ms = getattr(getattr(self.adapter, "clock", None), "now_ms", window_end_ms)
+        if now_ms < window_end_ms:
+            now_ms = window_end_ms
+
+        context = ActionContext(
+            run_id=run_id,
+            action_id=action_id,
+            window_start_ms=window_start_ms,
+            window_end_ms=window_end_ms,
+            now_ms=now_ms,
         )
 
-        # 3. 판정에 따른 사용자 안내 피드백 문구 생성
+        # 4. 의도 검증 실행
+        verdict = self.verifier.verify(
+            goal=goal,
+            baseline=baseline,
+            observations=observations,
+            context=context,
+        )
+
         feedback = get_verdict_message(verdict.status, verdict.verification_level)
-        return verdict, obs_res.data, feedback
+        return verdict, feedback
 
     def determine_next_status(self, verdict: Verdict) -> RunStatus:
         """docs/실행계약.md 상태 전이 규칙에 따라 다음 Run 상태를 결정합니다."""
         if verdict.status == "success" and verdict.verification_level == "exact_step":
             return "succeeded"
-        if verdict.status == "mismatch" and verdict.verification_level == "none":
-            # 유효한 변화 없음 -> 복구 가능 상태 (recovering)
+        if (
+            verdict.status == "mismatch"
+            and verdict.verification_level == "none"
+            and "no_output_change" in verdict.reason_codes
+        ):
+            # 오직 '유효한 변화 없음'일 때만 복구 루프 진입
             return "recovering"
-        # 단순 증가 또는 품질/센서 이상 -> uncertain
+        # 관측 누락(observations_missing), 품질 불량, 단계 불일치 등은 안전 중단
         return "uncertain"
 
     def handle_recovery(
@@ -118,12 +161,69 @@ class AgentOrchestrator:
         goal: Goal,
         verdict: Verdict,
         retry_count: int,
-        delayed_observation: dict[str, Any] | None = None,
+        run_id: str = "run-default",
+        action_id: str = "act-default",
+        window_start_ms: int = 500,
+        window_end_ms: int = 3500,
+        delayed_timeout_ms: int = 3000,
     ) -> RecoveryResult:
-        """오조작 복구 Skill을 호출하여 재조작 안내, 지연 성공 또는 안전 중단을 결정합니다."""
+        """오조작 복구 Skill을 호출하여 지연 성공, 재조작 안내, 또는 안전 중단을 결정합니다."""
+        if self.adapter is None:
+            return self.recovery.evaluate(
+                goal=goal,
+                current_verdict=verdict,
+                retry_count=retry_count,
+                delayed_checked=False,
+            )
+
+        # 1. 지연 도착 관측 확인 (delayed frame 수집)
+        delayed_verdict: Verdict | None = None
+        delayed_obs: list[Observation] = []
+        if hasattr(self.adapter, "await_touch_result"):
+            delayed_obs = self.adapter.await_touch_result(
+                run_id=run_id,
+                action_id=action_id,
+                zone_id=goal.zone_id,
+                window_start_ms=window_start_ms,
+                window_end_ms=window_end_ms,
+                timeout_ms=delayed_timeout_ms,
+            )
+
+        baseline = self.adapter.read_baseline(goal.zone_id) if hasattr(self.adapter, "read_baseline") else None
+        now_ms = getattr(getattr(self.adapter, "clock", None), "now_ms", window_end_ms)
+        if now_ms < window_end_ms:
+            now_ms = window_end_ms
+
+        if delayed_obs:
+            delayed_context = ActionContext(
+                run_id=run_id,
+                action_id=action_id,
+                window_start_ms=window_start_ms,
+                window_end_ms=window_end_ms,
+                now_ms=now_ms,
+            )
+            delayed_verdict = self.verifier.verify(
+                goal=goal,
+                baseline=baseline,
+                observations=delayed_obs,
+                context=delayed_context,
+            )
+
+        # 2. 센서 무결성 점검
+        sensor_integrity_ok = True
+        if hasattr(self.adapter, "check_sensor_integrity"):
+            quality = self.adapter.check_sensor_integrity()
+            sensor_integrity_ok = quality.status == "valid" and not quality.reasons
+
+        # 3. 새 기준선(new baseline) 확보
+        new_baseline = self.adapter.read_baseline(goal.zone_id) if hasattr(self.adapter, "read_baseline") else None
+
         return self.recovery.evaluate(
             goal=goal,
             current_verdict=verdict,
             retry_count=retry_count,
-            delayed_observation=delayed_observation,
+            delayed_verdict=delayed_verdict,
+            new_baseline=new_baseline,
+            sensor_integrity_ok=sensor_integrity_ok,
+            delayed_checked=True,
         )

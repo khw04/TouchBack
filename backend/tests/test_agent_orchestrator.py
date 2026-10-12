@@ -2,16 +2,11 @@
 import asyncio
 import pytest
 
+from app.adapters.mock_setup import build_mock_adapter
 from app.agent.orchestrator import AgentOrchestrator
 from app.agent.verifier import IntentVerifier
 from app.contracts.models import Goal
-from app.tools.base import ToolRegistry
-from app.tools.sensor_tools import (
-    AwaitTouchResultTool,
-    CheckSensorIntegrityTool,
-    MockSensorAdapter,
-    ReadFieldTool,
-)
+from app.verification.models import ActionContext, MockCalibration
 
 
 def test_orchestrator_goal_interpretation():
@@ -45,18 +40,16 @@ def test_orchestrator_instruction_generation():
 
 
 def test_orchestrator_scenario_exact_step_success():
-    """시나리오 1: 유효한 1단계 화력 증가 성공 (exact_step / success / succeeded)."""
+    """시나리오 1: 정상 Mock 어댑터를 통한 유효한 1단계 화력 증가 성공 (exact_step / success / succeeded)."""
     async def _run():
-        adapter = MockSensorAdapter(default_field_delta=45.2)
-        registry = ToolRegistry()
-        registry.register(AwaitTouchResultTool(provider=adapter.await_touch_result))
-
-        orch = AgentOrchestrator(tool_registry=registry)
+        adapter = build_mock_adapter("normal", zone_id="right")
+        orch = AgentOrchestrator(adapter=adapter)
         goal = Goal(zone_id="right", direction="increase", requested_steps=1)
 
-        verdict, data, feedback = await orch.execute_observation_and_verification(
+        verdict, feedback = await orch.execute_observation_and_verification(
             goal=goal,
             action_id="act-succ",
+            run_id="run-succ",
         )
 
         assert verdict.status == "success"
@@ -64,102 +57,135 @@ def test_orchestrator_scenario_exact_step_success():
         assert verdict.goal_satisfied is True
         assert orch.determine_next_status(verdict) == "succeeded"
         assert "화력이 한 단계 올라갔습니다" in feedback
-
-    asyncio.run(_run())
-
-
-def test_orchestrator_scenario_output_change_only():
-    """시나리오 2: 출력 증가는 감지되었으나 단계 판별 불가 (output_change / uncertain)."""
-    async def _run():
-        # delta 15.0, beep 0 -> 단순 출력 증가
-        def mock_provider(action_id: str, window_ms: int):
-            return {
-                "action_id": action_id,
-                "window_ms": window_ms,
-                "field_delta_rms": 15.0,
-                "beep_count": 0,
-                "status": "valid",
-            }
-
-        registry = ToolRegistry()
-        registry.register(AwaitTouchResultTool(provider=mock_provider))
-
-        orch = AgentOrchestrator(tool_registry=registry)
-        goal = Goal(zone_id="right", direction="increase", requested_steps=1)
-
-        verdict, data, feedback = await orch.execute_observation_and_verification(
-            goal=goal,
-            action_id="act-output-only",
-        )
-
-        assert verdict.status == "uncertain"
-        assert verdict.verification_level == "output_change"
-        assert verdict.goal_satisfied is None
-        assert orch.determine_next_status(verdict) == "uncertain"
-        assert "출력 증가를 확인했습니다. 정확히 한 단계인지는 확인하지 못했습니다" in feedback
+        # 실제 관측 ID 보존 확인
+        assert len(verdict.evidence_ids) >= 2
 
     asyncio.run(_run())
 
 
 def test_orchestrator_scenario_no_change_recovering():
-    """시나리오 3: 유효한 시간창에서 변화 없음 (none / mismatch / recovering 후보)."""
+    """시나리오 2: 유효한 시간창에서 변화 없음 (none / mismatch / recovering 후보)."""
     async def _run():
-        def mock_no_change(action_id: str, window_ms: int):
-            return {
-                "action_id": action_id,
-                "window_ms": window_ms,
-                "field_delta_rms": 0.5,
-                "beep_count": 0,
-                "status": "valid",
-            }
+        adapter = build_mock_adapter("no_change", zone_id="right")
+        orch = AgentOrchestrator(adapter=adapter)
+        goal = Goal(zone_id="right", direction="increase", requested_steps=1)
 
-        registry = ToolRegistry()
-        registry.register(AwaitTouchResultTool(provider=mock_no_change))
-
-        orch = AgentOrchestrator(tool_registry=registry)
-        goal = Goal(zone_id="left", direction="increase", requested_steps=1)
-
-        verdict, data, feedback = await orch.execute_observation_and_verification(
+        verdict, feedback = await orch.execute_observation_and_verification(
             goal=goal,
             action_id="act-no-change",
+            run_id="run-no-change",
         )
 
         assert verdict.status == "mismatch"
         assert verdict.verification_level == "none"
         assert verdict.goal_satisfied is False
+        assert "no_output_change" in verdict.reason_codes
         assert orch.determine_next_status(verdict) == "recovering"
         assert "출력 변화가 확인되지 않았습니다" in feedback
 
     asyncio.run(_run())
 
 
-def test_orchestrator_scenario_sensor_quality_degraded():
-    """시나리오 4: 센서 품질 불량 또는 비보정 (none / uncertain)."""
+def test_orchestrator_scenario_missing_observations_becomes_uncertain():
+    """시나리오 3: 관측 누락({})은 유효한 변화 없음이 아니므로 uncertain으로 종결되고 recovering 진입 차단."""
     async def _run():
-        def mock_degraded(action_id: str, window_ms: int):
-            return {
-                "action_id": action_id,
-                "window_ms": window_ms,
-                "field_delta_rms": 45.0,
-                "status": "degraded",
-                "quality": "degraded",
-            }
-
-        registry = ToolRegistry()
-        registry.register(AwaitTouchResultTool(provider=mock_degraded))
-
-        orch = AgentOrchestrator(tool_registry=registry)
+        adapter = build_mock_adapter("missing", zone_id="right")
+        orch = AgentOrchestrator(adapter=adapter)
         goal = Goal(zone_id="right", direction="increase", requested_steps=1)
 
-        verdict, data, feedback = await orch.execute_observation_and_verification(
+        verdict, feedback = await orch.execute_observation_and_verification(
             goal=goal,
-            action_id="act-degraded",
+            action_id="act-missing",
+            run_id="run-missing",
         )
 
         assert verdict.status == "uncertain"
         assert verdict.verification_level == "none"
-        assert verdict.goal_satisfied is None
+        assert "observations_missing" in verdict.reason_codes
+        # 누락은 유효한 변화 없음과 구분되어 uncertain 종결
         assert orch.determine_next_status(verdict) == "uncertain"
         assert "결과를 확인할 수 없습니다" in feedback
 
     asyncio.run(_run())
+
+
+def test_orchestrator_scenario_sensor_error_becomes_uncertain():
+    """시나리오 4: 센서 품질 불량(sensor_error)은 uncertain 안전 중단."""
+    async def _run():
+        adapter = build_mock_adapter("sensor_error", zone_id="right")
+        orch = AgentOrchestrator(adapter=adapter)
+        goal = Goal(zone_id="right", direction="increase", requested_steps=1)
+
+        verdict, feedback = await orch.execute_observation_and_verification(
+            goal=goal,
+            action_id="act-faulty",
+            run_id="run-faulty",
+        )
+
+        assert verdict.status == "uncertain"
+        assert verdict.verification_level == "none"
+        assert "sensor_quality_invalid" in verdict.reason_codes
+        assert orch.determine_next_status(verdict) == "uncertain"
+        assert "결과를 확인할 수 없습니다" in feedback
+
+    asyncio.run(_run())
+
+
+def test_verifier_rejects_zone_mismatch_and_preserves_contract():
+    """리뷰어 지적사항 1 검증: 목표가 right인데 관측이 left인 경우 verify_intent 계약에 의해 거부."""
+    adapter = build_mock_adapter("normal", zone_id="right")
+    baseline = adapter.read_baseline("right")
+    observations = adapter.await_touch_result(
+        run_id="run-1",
+        action_id="act-mismatch",
+        zone_id="right",
+        window_start_ms=500,
+        window_end_ms=3500,
+    )
+    # 목표는 right인데 관측 프레임의 zone_id를 left로 변조
+    observations[0].device_observation.zone_id = "left"
+
+    context = ActionContext(
+        run_id="run-1",
+        action_id="act-mismatch",
+        window_start_ms=500,
+        window_end_ms=3500,
+        now_ms=3500,
+    )
+    goal = Goal(zone_id="right", direction="increase", requested_steps=1)
+    verifier = IntentVerifier()
+    verdict = verifier.verify(goal, baseline, observations, context)
+
+    assert verdict.status == "uncertain"
+    assert "zone_mismatch" in verdict.reason_codes
+    assert verdict.goal_satisfied is None
+
+
+def test_verifier_rejects_uncalibrated_or_unverified_clock():
+    """리뷰어 지적사항 1 검증: 시계 미동기화 및 품질 불량 관측에 대해 exact_step success 허용 안 함."""
+    adapter = build_mock_adapter("normal", zone_id="right")
+    baseline = adapter.read_baseline("right")
+    observations = adapter.await_touch_result(
+        run_id="run-1",
+        action_id="act-1",
+        zone_id="right",
+        window_start_ms=500,
+        window_end_ms=3500,
+    )
+    # 시계 미동기화로 변조
+    observations[0].clock_quality = "unverified"
+
+    context = ActionContext(
+        run_id="run-1",
+        action_id="act-1",
+        window_start_ms=500,
+        window_end_ms=3500,
+        now_ms=3500,
+    )
+    goal = Goal(zone_id="right", direction="increase", requested_steps=1)
+    verifier = IntentVerifier()
+    result = verifier.verify(goal, baseline, observations, context)
+
+    assert result.status == "uncertain"
+    assert "clock_unverified" in result.reason_codes
+    assert result.goal_satisfied is None

@@ -291,6 +291,7 @@ def test_run_step_unconfigured_sensor_returns_uncertain():
 def test_run_step_with_mock_orchestrator_returns_succeeded():
     """Mock 센서 어댑터가 연결된 오케스트레이터로 step 실행 시 정상 1단계 성공 (C-YD-02)."""
     import asyncio
+    from app.adapters.mock_setup import build_mock_adapter
     from app.agent.orchestrator import AgentOrchestrator
 
     create_res = client.post("/api/runs", json={"user_input": "화력 1단 올려줘", "source": "mock", "zone_id": "right"})
@@ -300,7 +301,7 @@ def test_run_step_with_mock_orchestrator_returns_succeeded():
     client.post(f"/api/runs/{run_id}/ack", json={"action_id": action_id})
 
     # Mock 어댑터 오케스트레이터 주입
-    mock_orch = AgentOrchestrator()
+    mock_orch = AgentOrchestrator(adapter=build_mock_adapter("normal", zone_id="right"))
     res = asyncio.run(run_store.execute_observation_step(run_id, orchestrator=mock_orch))
 
     assert res.status == "succeeded"

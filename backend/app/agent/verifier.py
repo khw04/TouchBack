@@ -1,92 +1,81 @@
-"""Intent output verification bridge based on docs/판정기준.md and v0.2 contracts."""
-from typing import Any
-from app.contracts.models import Goal, Verdict
+"""Intent output verification bridge using C-KH-03 verify_intent and MockCalibration."""
+from pathlib import Path
+
+from app.contracts.models import Goal, Observation, Verdict, Zone
+from app.verification.models import ActionContext, MockCalibration
+from app.verification.verifier import verify_intent
+
+DEFAULT_CALIBRATION_PATH = (
+    Path(__file__).resolve().parents[1] / "verification/mock-calibration.json"
+)
+
+
+def load_default_mock_calibration() -> MockCalibration:
+    """기본 Mock 보정 프로필 로드 (backend/app/verification/mock-calibration.json)."""
+    if DEFAULT_CALIBRATION_PATH.exists():
+        return MockCalibration.model_validate_json(
+            DEFAULT_CALIBRATION_PATH.read_text(encoding="utf-8")
+        )
+    return MockCalibration(
+        source="mock",
+        calibration_id="mock-test-v1",
+        device_id="mock-device-01",
+        session_id="mock-session-01",
+        zone_id="right",
+        unit="adc_count",
+        method="ac_rms_v1",
+        sample_rate_hz=1000,
+        baseline_rms_min=95.0,
+        baseline_rms_max=105.0,
+        no_change_tolerance=2.0,
+        increase_min=5.0,
+        min_observation_ms=500,
+        max_baseline_age_ms=500,
+        max_observation_age_ms=5000,
+        max_transport_delay_ms=4000,
+        step_bands=[
+            {"steps": 1, "delta_min": 18.0, "delta_max": 22.0},
+            {"steps": 2, "delta_min": 38.0, "delta_max": 42.0},
+        ],
+    )
 
 
 class IntentVerifier:
-    """사용자의 목표와 센서 관측 결과를 대조하여 Verdict를 판정하는 브리지."""
+    """공통 verify_intent 계약을 연결하는 의도 검증 브리지."""
+
+    def __init__(self, calibration: MockCalibration | None = None) -> None:
+        self._calibration = calibration or load_default_mock_calibration()
+
+    @property
+    def calibration(self) -> MockCalibration:
+        return self._calibration
+
+    def get_calibration_for_zone(self, zone_id: Zone) -> MockCalibration:
+        """지정된 화구에 맞는 MockCalibration 프로필 반환."""
+        if self._calibration.zone_id == zone_id:
+            return self._calibration
+        return self._calibration.model_copy(update={"zone_id": zone_id})
 
     def verify(
         self,
         goal: Goal,
-        observation_data: dict[str, Any],
-        evidence_id: str = "obs-mock-1",
+        baseline: Observation | None,
+        observations: list[Observation],
+        context: ActionContext,
+        calibration: MockCalibration | None = None,
     ) -> Verdict:
-        """관측 데이터를 기반으로 docs/판정기준.md에 정의된 5대 판정 경로를 도출합니다."""
-        # 1. 센서 오류, 품질 불량, 또는 미연결 상태 점검
-        obs_status = observation_data.get("status")
-        quality = observation_data.get("quality", "valid")
-        if obs_status in ("invalid", "degraded", "error") or quality in ("invalid", "degraded"):
-            return Verdict(
-                status="uncertain",
-                verification_level="none",
-                goal_satisfied=None,
-                reason_codes=["sensor_quality_degraded_or_uncalibrated"],
-                evidence_ids=[evidence_id],
-            )
+        """C-KH-03 verify_intent 계약을 실행하여 엄격한 검증을 수행합니다.
 
-        # 관측 수치 추출
-        field_delta = float(observation_data.get("field_delta_rms", 0.0))
-        beep_count = int(observation_data.get("beep_count", 0))
-        step_detected = observation_data.get("step_detected")
-
-        # 2. 유효한 시간창에서 변화 없음 (delta < 5.0 및 beep == 0)
-        # 비프음 단독으로는 성공할 수 없으나, 변화 없음 확인 시에는 비프음도 없어야 함
-        if field_delta < 5.0 and beep_count == 0:
-            return Verdict(
-                status="mismatch",
-                verification_level="none",
-                goal_satisfied=False,
-                reason_codes=["no_output_change_detected"],
-                evidence_ids=[evidence_id],
-            )
-
-        # 3. 명시적 단계 감지 기반 판정 (step_detected 제공 시)
-        if step_detected is not None:
-            if step_detected == goal.requested_steps:
-                return Verdict(
-                    status="success",
-                    verification_level="exact_step",
-                    goal_satisfied=True,
-                    reason_codes=["exact_step_verified"],
-                    evidence_ids=[evidence_id],
-                )
-            elif step_detected > goal.requested_steps:
-                return Verdict(
-                    status="mismatch",
-                    verification_level="exact_step",
-                    goal_satisfied=False,
-                    reason_codes=["step_mismatch_over_increment"],
-                    evidence_ids=[evidence_id],
-                )
-
-        # 4. 수치 임계값 기반 판별 (Mock 기본값: delta >= 30.0은 1단 증가 성공)
-        if field_delta >= 30.0 and beep_count >= 1:
-            return Verdict(
-                status="success",
-                verification_level="exact_step",
-                goal_satisfied=True,
-                reason_codes=["exact_step_verified_by_delta_and_beep"],
-                evidence_ids=[evidence_id],
-            )
-
-        # 5. 단순 출력 증가만 확인되고 정확한 단계 구분 불가
-        if field_delta >= 10.0:
-            return Verdict(
-                status="uncertain",
-                verification_level="output_change",
-                goal_satisfied=None,
-                reason_codes=["output_increased_step_unverified"],
-                evidence_ids=[evidence_id],
-            )
-
-        # 6. 기타/판별 불가
-        return Verdict(
-            status="uncertain",
-            verification_level="none",
-            goal_satisfied=None,
-            reason_codes=["unclassified_observation"],
-            evidence_ids=[evidence_id],
+        보정 프로필, 화구 일치, 센서 품질, 시계 동기화, 시간창 및 샘플 검사를
+        우회하지 않고 실제 관측 ID들을 evidence_ids로 보존합니다.
+        """
+        cal = calibration or self.get_calibration_for_zone(goal.zone_id)
+        return verify_intent(
+            goal=goal,
+            baseline=baseline,
+            observations=observations,
+            context=context,
+            calibration=cal,
         )
 
 
