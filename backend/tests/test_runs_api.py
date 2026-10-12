@@ -251,3 +251,12 @@ def test_validation_error_format():
     err = response.json()
     assert err["code"] == "validation"
     assert "요청 형식" in err["message"]
+
+
+@pytest.mark.parametrize("user_input", ["화력 올려주지 마", "화력 1단 증가시키지 마", "화력 안 올려줘", "화력 2단 올려줘", "화력 두 단계 올려줘"])
+def test_negated_or_out_of_scope_goal_requires_clarification(user_input):
+    response = client.post("/api/runs", json={"user_input": user_input, "source": "mock", "zone_id": "right"})
+    assert response.status_code == 201
+    result = client.get("/api/runs/" + response.json()["run_id"]).json()
+    assert result["status"] == "awaiting_clarification"
+    assert result["instruction"] is None

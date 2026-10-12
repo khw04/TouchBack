@@ -1,6 +1,7 @@
 """Execution API (C-YD-00): run lifecycle, concurrency lock, timeouts, ack, and cancel."""
 from datetime import datetime, timezone
 import threading
+import re
 import uuid
 from typing import Callable, Literal
 
@@ -44,6 +45,11 @@ class RunApiException(Exception):
 def is_supported_p0_goal(user_input: str) -> bool:
     """P0 지원 목표 여부 검증 (화력 1단 증가만 지원, 감소/종료는 미지원)."""
     text = user_input.lower().strip()
+    # 부정/금지 및 P0 범위 밖 단계 요청은 실제 조작으로 변환하지 않는다.
+    if re.search(r"(?:하지|주지|리지|시키지|지)\s*마|말아|말고|않|안\s*(?:올|높|켜|시작|증가)", text):
+        return False
+    if re.search(r"(?:[02-9]\d*|1\d+)\s*(?:단|단계)|(?:두|세|네|다섯|여섯|일곱|여덟|아홉|열)\s*(?:단계|단|번)", text):
+        return False
     unsupported_keywords = [
         "꺼",
         "종료",
