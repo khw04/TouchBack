@@ -1,0 +1,22 @@
+{
+  "source": "mock",
+  "calibration_id": "mock-test-v1",
+  "device_id": "mock-device-01",
+  "session_id": "mock-session-01",
+  "zone_id": "right",
+  "unit": "adc_count",
+  "method": "ac_rms_v1",
+  "sample_rate_hz": 1000,
+  "baseline_rms_min": 95.0,
+  "baseline_rms_max": 105.0,
+  "no_change_tolerance": 2.0,
+  "increase_min": 5.0,
+  "min_observation_ms": 500,
+  "max_baseline_age_ms": 500,
+  "max_observation_age_ms": 5000,
+  "max_transport_delay_ms": 4000,
+  "step_bands": [
+    {"steps": 1, "delta_min": 18.0, "delta_max": 22.0},
+    {"steps": 2, "delta_min": 38.0, "delta_max": 42.0}
+  ]
+}
