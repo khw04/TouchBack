@@ -6,6 +6,8 @@
 
 - main은 리뷰된 결과만 받는다. 직접 push 금지. force push로 타인의 이력을 덮어쓰지 않는다.
 - 작업 브랜치: feat/<작업>, fix/<작업>, docs/<작업>, chore/<작업>. 예: feat/mock-observation.
+- 선행 PR의 코드가 필요한 후속 작업은 최신 선행 작업 브랜치에서 분기하고, 후속 PR의 기준도 선행 브랜치로 설정한다. 선행 변경은 순서대로 후속 브랜치에 merge하며 공유 브랜치를 force push하지 않는다.
+- 선행 PR을 squash 병합한 뒤에는 후속 브랜치에 최신 main을 반영해 이력·충돌을 정리하고, PR 기준을 main으로 변경한다. 브랜치 분기만으로 squash 병합 이후 충돌이 자동 방지되지는 않는다.
 - 커밋 형식: `type(scope): 작업 요약`. scope는 선택이며 sensor, firmware, agent, skill, ui, docs 등을 쓴다.
 - type: feat 기능, fix 오류, docs 문서, refactor 동작을 유지하는 구조 개선, test 검증, chore 설정/관리.
 - 예: `docs(plan): 본선 준비 단계와 완료 조건 정의`, `feat(agent): 관측 불확실 상태 처리`.
