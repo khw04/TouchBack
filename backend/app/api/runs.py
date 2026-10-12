@@ -7,6 +7,8 @@ from typing import Callable, Literal
 from fastapi import APIRouter, status
 from pydantic import BaseModel
 
+from app.agent.orchestrator import AgentOrchestrator
+from app.agent.verifier import IntentVerifier
 from app.contracts.models import (
     AckRequest,
     AckResponse,
@@ -14,6 +16,7 @@ from app.contracts.models import (
     CreateRunRequest,
     CreateRunResponse,
     ExecutionMode,
+    Goal,
     Instruction,
     RunEvent,
     RunResponse,
@@ -360,6 +363,73 @@ class RunStore:
 
             return CancelResponse(run_id=state.run_id, status="stopped")
 
+    async def execute_observation_step(
+        self,
+        run_id: str,
+        orchestrator: AgentOrchestrator | None = None,
+    ) -> RunResponse:
+        """observing 상태의 실행에 대해 관측 수집 및 의도 검증 사이클 1회를 수행합니다."""
+        with self._lock:
+            state = self._runs.get(run_id)
+            if not state:
+                raise RunApiException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    code="unknown_run",
+                    message=f"실행 '{run_id}'을(를) 찾을 수 없습니다.",
+                )
+
+            if state.status != "observing":
+                raise RunApiException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    code="terminal_run" if state.status in TERMINAL_STATUSES else "stale_action",
+                    message=f"현재 상태('{state.status}')에서는 관측을 진행할 수 없습니다. observing 상태여야 합니다.",
+                )
+
+            action_id = state.last_acked_action_id or state.current_action_id or "act-unknown"
+            zone = state.zone_id or "right"
+            goal = Goal(zone_id=zone, direction="increase", requested_steps=1)
+
+        orch = orchestrator or AgentOrchestrator()
+        verdict, data, feedback = await orch.execute_observation_and_verification(
+            goal=goal,
+            action_id=action_id,
+        )
+
+        with self._lock:
+            now = self._now_utc()
+            state.verdict = verdict
+            next_status = orch.determine_next_status(verdict)
+            state.status = next_status
+            state.status_updated_at = now
+
+            self._add_event(
+                state,
+                kind="observation",
+                action_id=action_id,
+                message=f"센서 관측 수집 완료 (delta={data.get('field_delta_rms', 0.0)}, beep={data.get('beep_count', 0)})",
+                evidence_ids=verdict.evidence_ids,
+            )
+            self._add_event(
+                state,
+                kind="verdict",
+                action_id=action_id,
+                message=feedback,
+                evidence_ids=verdict.evidence_ids,
+            )
+
+            if next_status in TERMINAL_STATUSES and self._active_run_id == run_id:
+                self._active_run_id = None
+
+            return RunResponse(
+                run_id=state.run_id,
+                status=state.status,
+                execution_mode=state.execution_mode,
+                source=state.source,
+                instruction=state.instruction,
+                verdict=state.verdict,
+                events=state.events,
+            )
+
 
 run_store = RunStore()
 router = APIRouter(prefix="/api/runs", tags=["runs"])
@@ -378,6 +448,11 @@ def get_run(run_id: str) -> RunResponse:
 @router.post("/{run_id}/ack", response_model=AckResponse)
 def ack_run(run_id: str, req: AckRequest) -> AckResponse:
     return run_store.ack_run(run_id, req)
+
+
+@router.post("/{run_id}/step", response_model=RunResponse)
+async def step_run(run_id: str) -> RunResponse:
+    return await run_store.execute_observation_step(run_id)
 
 
 @router.post("/{run_id}/cancel", response_model=CancelResponse)
