@@ -14,7 +14,7 @@ python -m venv .venv
 ```
 
 브라우저에서 http://127.0.0.1:8000/health 또는 http://127.0.0.1:8000/docs 를 연다.
-현재 `/api/runs`는 404다. 모델 API 키가 없어도 서버와 테스트를 실행할 수 있다.
+현재 `/api/runs`는 backend_stub 모드로 POST/GET/ack/cancel을 제공한다. live 출처는 미준비 오류로 거부하고 미지원·부정·다단계 목표는 조작 안내 없이 명확화한다. 실제 Agent·LLM 연결은 후속 작업이다. 모델 API 키가 없어도 서버와 테스트를 실행할 수 있다.
 운영 의존성만 설치할 때는 `backend/requirements.txt`를 사용한다. 개발 파일은 테스트 의존성까지 포함한 고정 버전 목록이다.
 
 ## 검증
