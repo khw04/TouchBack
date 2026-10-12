@@ -98,6 +98,8 @@ class RunState(BaseModel):
     last_acked_action_id: str | None = None
     retry_count: int = 0
     generation: int = 1
+    action_window_start_ms: int = 500
+    action_window_end_ms: int = 3500
     created_at: datetime
     status_updated_at: datetime
 
@@ -403,12 +405,16 @@ class RunStore:
             goal = Goal(zone_id=zone, direction="increase", requested_steps=1)
             expected_generation = state.generation
             expected_action_id = action_id
+            window_start_ms = state.action_window_start_ms
+            window_end_ms = state.action_window_end_ms
 
         orch = orchestrator or AgentOrchestrator()
         verdict, feedback = await orch.execute_observation_and_verification(
             goal=goal,
             action_id=action_id,
             run_id=run_id,
+            window_start_ms=window_start_ms,
+            window_end_ms=window_end_ms,
         )
 
         with self._lock:
@@ -452,6 +458,8 @@ class RunStore:
                     retry_count=current_state.retry_count,
                     run_id=run_id,
                     action_id=action_id,
+                    window_start_ms=window_start_ms,
+                    window_end_ms=window_end_ms,
                 )
                 if rec_res.decision.value == "retry_instruction" and rec_res.instruction is not None:
                     current_state.retry_count += 1
@@ -459,6 +467,8 @@ class RunStore:
                     current_state.instruction = rec_res.instruction
                     current_state.current_action_id = rec_res.instruction.action_id
                     current_state.seen_action_ids.append(rec_res.instruction.action_id)
+                    current_state.action_window_start_ms = rec_res.next_window_start_ms
+                    current_state.action_window_end_ms = rec_res.next_window_end_ms
                     current_state.status_updated_at = now
                     current_state.generation += 1
 

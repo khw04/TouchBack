@@ -165,7 +165,7 @@ class AgentOrchestrator:
         action_id: str = "act-default",
         window_start_ms: int = 500,
         window_end_ms: int = 3500,
-        delayed_timeout_ms: int = 3000,
+        delayed_timeout_ms: int = 1000,
     ) -> RecoveryResult:
         """오조작 복구 Skill을 호출하여 지연 성공, 재조작 안내, 또는 안전 중단을 결정합니다."""
         if self.adapter is None:
@@ -176,7 +176,7 @@ class AgentOrchestrator:
                 delayed_checked=False,
             )
 
-        # 1. 지연 도착 관측 확인 (delayed frame 수집)
+        # 1. 원래 action에 대한 지연 도착 관측 확인 (delayed frame 수집)
         delayed_verdict: Verdict | None = None
         delayed_obs: list[Observation] = []
         if hasattr(self.adapter, "await_touch_result"):
@@ -215,8 +215,11 @@ class AgentOrchestrator:
             quality = self.adapter.check_sensor_integrity()
             sensor_integrity_ok = quality.status == "valid" and not quality.reasons
 
-        # 3. 새 기준선(new baseline) 확보
+        # 3. 새 기준선(new baseline) 확보 및 시간창 분리
         new_baseline = self.adapter.read_baseline(goal.zone_id) if hasattr(self.adapter, "read_baseline") else None
+        calibration = self.verifier.get_calibration_for_zone(goal.zone_id)
+        retry_window_start_ms = now_ms
+        retry_window_end_ms = now_ms + 3000
 
         return self.recovery.evaluate(
             goal=goal,
@@ -224,6 +227,10 @@ class AgentOrchestrator:
             retry_count=retry_count,
             delayed_verdict=delayed_verdict,
             new_baseline=new_baseline,
+            now_ms=now_ms,
+            calibration=calibration,
             sensor_integrity_ok=sensor_integrity_ok,
             delayed_checked=True,
+            next_window_start_ms=retry_window_start_ms,
+            next_window_end_ms=retry_window_end_ms,
         )
