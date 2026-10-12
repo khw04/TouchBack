@@ -91,6 +91,7 @@ class RunState(BaseModel):
     current_action_id: str | None = None
     seen_action_ids: list[str] = []
     last_acked_action_id: str | None = None
+    retry_count: int = 0
     created_at: datetime
     status_updated_at: datetime
 
@@ -399,6 +400,56 @@ class RunStore:
             now = self._now_utc()
             state.verdict = verdict
             next_status = orch.determine_next_status(verdict)
+
+            # C-YD-03 오조작 복구 Skill 연계: 변화 없음(mismatch/none) 시 재조작 안내 또는 안전 중단
+            if next_status == "recovering":
+                rec_res = orch.handle_recovery(
+                    goal=goal,
+                    verdict=verdict,
+                    retry_count=state.retry_count,
+                )
+                if rec_res.decision.value == "retry_instruction" and rec_res.instruction is not None:
+                    state.retry_count += 1
+                    state.status = "awaiting_user"
+                    state.instruction = rec_res.instruction
+                    state.current_action_id = rec_res.instruction.action_id
+                    state.seen_action_ids.append(rec_res.instruction.action_id)
+                    state.status_updated_at = now
+
+                    self._add_event(
+                        state,
+                        kind="observation",
+                        action_id=action_id,
+                        message=f"센서 관측 수집 완료 (delta={data.get('field_delta_rms', 0.0)}, beep={data.get('beep_count', 0)})",
+                        evidence_ids=verdict.evidence_ids,
+                    )
+                    self._add_event(
+                        state,
+                        kind="recovery",
+                        action_id=rec_res.instruction.action_id,
+                        message=rec_res.message,
+                        evidence_ids=verdict.evidence_ids,
+                    )
+                    return RunResponse(
+                        run_id=state.run_id,
+                        status=state.status,
+                        execution_mode=state.execution_mode,
+                        source=state.source,
+                        instruction=state.instruction,
+                        verdict=state.verdict,
+                        events=state.events,
+                    )
+                elif rec_res.decision.value == "abort_uncertain":
+                    next_status = "uncertain"
+                    if rec_res.updated_verdict:
+                        state.verdict = rec_res.updated_verdict
+                    feedback = rec_res.message
+                elif rec_res.decision.value == "late_success":
+                    next_status = "succeeded"
+                    if rec_res.updated_verdict:
+                        state.verdict = rec_res.updated_verdict
+                    feedback = rec_res.message
+
             state.status = next_status
             state.status_updated_at = now
 

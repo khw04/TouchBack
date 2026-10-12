@@ -3,6 +3,7 @@ from typing import Any
 import uuid
 
 from app.agent.prompts import get_verdict_message
+from app.agent.recovery import MisoperationRecoverySkill, RecoveryResult, default_recovery_skill
 from app.agent.verifier import IntentVerifier, default_verifier
 from app.contracts.models import (
     Goal,
@@ -20,17 +21,19 @@ from app.tools.registry import default_tool_registry
 
 
 class AgentOrchestrator:
-    """사용자 목표 수신부터 센서 관측 및 의도 검증까지 총괄하는 Agent 오케스트레이터."""
+    """사용자 목표 수신부터 센서 관측, 의도 검증 및 오조작 복구까지 총괄하는 Agent 오케스트레이터."""
 
     def __init__(
         self,
         llm_provider: BaseLlmProvider | None = None,
         tool_registry: ToolRegistry | None = None,
         verifier: IntentVerifier | None = None,
+        recovery_skill: MisoperationRecoverySkill | None = None,
     ) -> None:
         self.llm = llm_provider or MockLlmProvider()
         self.tools = tool_registry or default_tool_registry
         self.verifier = verifier or default_verifier
+        self.recovery = recovery_skill or default_recovery_skill
 
     def interpret_goal(
         self,
@@ -109,3 +112,18 @@ class AgentOrchestrator:
             return "recovering"
         # 단순 증가 또는 품질/센서 이상 -> uncertain
         return "uncertain"
+
+    def handle_recovery(
+        self,
+        goal: Goal,
+        verdict: Verdict,
+        retry_count: int,
+        delayed_observation: dict[str, Any] | None = None,
+    ) -> RecoveryResult:
+        """오조작 복구 Skill을 호출하여 재조작 안내, 지연 성공 또는 안전 중단을 결정합니다."""
+        return self.recovery.evaluate(
+            goal=goal,
+            current_verdict=verdict,
+            retry_count=retry_count,
+            delayed_observation=delayed_observation,
+        )
