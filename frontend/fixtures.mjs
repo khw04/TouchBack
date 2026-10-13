@@ -1,21 +1,20 @@
+import { TERMINAL } from "./api.mjs?v=15";
 const now = () => new Date().toISOString();
 let sequence = 0;
 
 export const FIXTURE_SCENARIOS = new Set(["normal", "recovery", "sensor_error"]);
 
 export function fixtureGoal(userInput, selectedZone) {
-  const mentionsRight = /오른쪽|우측/.test(userInput);
-  const mentionsLeft = /왼쪽|좌측/.test(userInput);
-  if (!/올려|높여|증가|\+/.test(userInput) || /내려|낮춰|감소|꺼/.test(userInput)) {
-    return { zone: null, message: "화력을 한 단계 올리는 요청만 화면 연습할 수 있습니다. 목표를 다시 입력하세요." };
-  }
-  if (mentionsRight && mentionsLeft) return { zone: null, message: "요청에 양쪽 화구가 모두 들어 있습니다. 화구를 하나만 지정하세요." };
-  const mentionedZone = mentionsRight ? "right" : mentionsLeft ? "left" : null;
+  // Same conservative full-request gate as backend contracts/goal_policy.py.
+  // Shared regression vectors guard Python/JavaScript parity.
+  const match = /^(?:인덕션\s*)?(?:(오른쪽|우측|왼쪽|좌측)\s*(?:화구(?:의)?\s*)?)?(?:화력|출력)(?:을|를)?\s*(?:좀\s*)?(?:(?:한\s*단계|한\s*단|1\s*단계|1\s*단)\s*)?(?:올려(?:줘|주세요)?|높여(?:줘|주세요)?|증가(?:시켜(?:줘|주세요)?|시켜\s*주세요|해(?:줘|주세요)?)?|키워(?:줘|주세요)?)[.!]?$/.exec(userInput.trim());
+  if (!match) return { zone: null, message: "지원하지 않거나 준비되지 않은 목표입니다. 화력을 한 단계 올리는 단일 요청인지 확인해 주세요." };
+  const mentionedZone = ["오른쪽", "우측"].includes(match[1]) ? "right" : match[1] ? "left" : null;
   if (selectedZone && mentionedZone && selectedZone !== mentionedZone) {
-    return { zone: null, message: "입력한 화구와 선택한 화구가 다릅니다. 두 값을 일치시키세요." };
+    return { zone: null, message: "입력한 화구와 선택한 화구가 다릅니다. 화구를 확인해 주세요." };
   }
   const zone = selectedZone || mentionedZone;
-  if (!zone) return { zone: null, message: "화구를 확인할 수 없습니다. 오른쪽 또는 왼쪽을 지정하세요." };
+  if (!zone) return { zone: null, message: "화구가 지정되지 않았습니다. 조작할 화구를 선택해 주세요." };
   return { zone, message: null };
 }
 
@@ -69,6 +68,7 @@ export function createFixture() {
     },
     async cancel(id) {
       const run = runs.get(id);
+      if (TERMINAL.has(run.status)) return snapshot(run);
       run.status = "stopped";
       run.instruction = null;
       run.events.push(event(run, "error", "화면 예시가 취소되었습니다."));

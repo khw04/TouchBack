@@ -1,0 +1,157 @@
+[
+  {
+    "text": "화력 올려줘",
+    "selected": "right",
+    "zone": "right"
+  },
+  {
+    "text": "화력 한 단계 올려줘",
+    "selected": "left",
+    "zone": "left"
+  },
+  {
+    "text": "오른쪽 화구 화력을 한 단계 올려줘",
+    "selected": "right",
+    "zone": "right"
+  },
+  {
+    "text": "왼쪽 화력 1단 올려줘",
+    "selected": "left",
+    "zone": "left"
+  },
+  {
+    "text": "우측 출력 증가시켜줘",
+    "selected": null,
+    "zone": "right"
+  },
+  {
+    "text": "왼쪽 화력 올려줘",
+    "selected": null,
+    "zone": "left"
+  },
+  {
+    "text": "인덕션 화력을 1단계 높여주세요",
+    "selected": "left",
+    "zone": "left"
+  },
+  {
+    "text": "음악 시작해",
+    "selected": "right",
+    "zone": null
+  },
+  {
+    "text": "음악 볼륨 올려줘",
+    "selected": "right",
+    "zone": null
+  },
+  {
+    "text": "시작",
+    "selected": "right",
+    "zone": null
+  },
+  {
+    "text": "켜줘",
+    "selected": "right",
+    "zone": null
+  },
+  {
+    "text": "+",
+    "selected": "right",
+    "zone": null
+  },
+  {
+    "text": "한 단계",
+    "selected": "right",
+    "zone": null
+  },
+  {
+    "text": "화력",
+    "selected": "right",
+    "zone": null
+  },
+  {
+    "text": "화력 두 단계 올려줘",
+    "selected": "right",
+    "zone": null
+  },
+  {
+    "text": "화력 2단 올려줘",
+    "selected": "right",
+    "zone": null
+  },
+  {
+    "text": "화력 10단 올려줘",
+    "selected": "right",
+    "zone": null
+  },
+  {
+    "text": "화력 한 단계 올려주지 마",
+    "selected": "right",
+    "zone": null
+  },
+  {
+    "text": "화력 안 올려줘",
+    "selected": "right",
+    "zone": null
+  },
+  {
+    "text": "화력 올리지 말아줘",
+    "selected": "right",
+    "zone": null
+  },
+  {
+    "text": "화력 증가시키지 마",
+    "selected": "right",
+    "zone": null
+  },
+  {
+    "text": "화력 올려줘 그리고 타이머 시작해",
+    "selected": "right",
+    "zone": null
+  },
+  {
+    "text": "화력 올리고 내려줘",
+    "selected": "right",
+    "zone": null
+  },
+  {
+    "text": "왼쪽 화력 올려줘",
+    "selected": "right",
+    "zone": null
+  },
+  {
+    "text": "오른쪽 화력 올려줘",
+    "selected": "left",
+    "zone": null
+  },
+  {
+    "text": "양쪽 화력 올려줘",
+    "selected": "right",
+    "zone": null
+  },
+  {
+    "text": "오른쪽 왼쪽 화력 올려줘",
+    "selected": "right",
+    "zone": null
+  },
+  {
+    "text": "화력 올려줘",
+    "selected": null,
+    "zone": null
+  },
+  {
+    "text": "온도 한 단계 올려줘",
+    "selected": "right",
+    "zone": null
+  },
+  {
+    "text": "화력 올려줘?",
+    "selected": "right",
+    "zone": null
+  },
+  {
+    "text": "화력 좀 올려줘",
+    "selected": "right",
+    "zone": "right"
+  }
+]

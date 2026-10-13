@@ -2,6 +2,7 @@
 from typing import Any
 import uuid
 
+from app.contracts.goal_policy import interpret_p0_goal
 from app.agent.prompts import get_verdict_message
 from app.agent.recovery import MisoperationRecoverySkill, RecoveryResult, default_recovery_skill
 from app.agent.verifier import IntentVerifier, default_verifier
@@ -42,19 +43,7 @@ class AgentOrchestrator:
         zone_id: Zone | None,
     ) -> tuple[Goal | None, str | None]:
         """사용자 발화를 분석하여 P0 유효 목표(Goal)를 도출합니다."""
-        text = user_input.lower().strip()
-        unsupported = ["꺼", "종료", "꺼줘", "내려", "감소", "낮춰", "줄여", "정지", "차단", "off", "중단"]
-        if any(kw in text for kw in unsupported):
-            return None, f"지원하지 않거나 준비되지 않은 목표입니다: '{user_input}'. P0에서는 화력 1단 증가만 지원합니다."
-
-        supported = ["올려", "증가", "높여", "키워", "1단", "한 단계", "켜", "시작", "+"]
-        if not any(kw in text for kw in supported):
-            return None, f"지원하지 않거나 불명확한 목표입니다: '{user_input}'. P0에서는 화력 1단 증가('화력 1단 올려줘')만 지원합니다."
-
-        if zone_id is None:
-            return None, "화구가 지정되지 않았습니다. 조작할 화구(왼쪽/오른쪽)를 선택해 주세요."
-
-        return Goal(zone_id=zone_id, direction="increase", requested_steps=1), None
+        return interpret_p0_goal(user_input, zone_id)
 
     def build_instruction(self, goal: Goal, action_id: str | None = None) -> Instruction:
         """목표에 맞는 물리 버튼 조작 안내를 생성합니다."""
@@ -75,8 +64,6 @@ class AgentOrchestrator:
         timeout_ms: int = 3000,
     ) -> tuple[Verdict, str]:
         """관측 어댑터에서 신호를 수집하고 verify_intent 계약으로 엄격히 검증합니다."""
-        evidence_id = f"ev-{action_id}"
-
         if self.adapter is None:
             # 미설정 센서인 경우 안전하게 uncertain 종료
             verdict = Verdict(
@@ -84,7 +71,7 @@ class AgentOrchestrator:
                 verification_level="none",
                 goal_satisfied=None,
                 reason_codes=["sensor_adapter_unconfigured"],
-                evidence_ids=[evidence_id],
+                evidence_ids=[],
             )
             feedback = get_verdict_message("uncertain", "none")
             return verdict, feedback

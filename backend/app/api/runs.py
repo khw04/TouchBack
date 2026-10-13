@@ -1,6 +1,6 @@
 """Execution API (C-YD-00, C-YD-02, C-YD-03): run lifecycle, concurrency lock, timeouts, ack, cancel, and observation step."""
 from datetime import datetime, timezone
-import re
+import asyncio
 import threading
 import uuid
 from typing import Callable, Literal
@@ -9,6 +9,7 @@ from fastapi import APIRouter, status
 from pydantic import BaseModel
 
 from app.agent.orchestrator import AgentOrchestrator
+from app.contracts.goal_policy import interpret_p0_goal
 from app.contracts.models import (
     AckRequest,
     AckResponse,
@@ -16,7 +17,6 @@ from app.contracts.models import (
     CreateRunRequest,
     CreateRunResponse,
     ExecutionMode,
-    Goal,
     Instruction,
     RunEvent,
     RunResponse,
@@ -27,6 +27,7 @@ from app.contracts.models import (
 )
 
 TERMINAL_STATUSES: set[RunStatus] = {"succeeded", "uncertain", "stopped", "failed"}
+TIMEOUT_OBSERVING_SECONDS = 10
 TIMEOUT_AWAITING_USER_SECONDS = 60
 TIMEOUT_AWAITING_CLARIFICATION_SECONDS = 120
 
@@ -44,43 +45,8 @@ class RunApiException(Exception):
         self.message = message
 
 
-def is_supported_p0_goal(user_input: str) -> bool:
-    """P0 지원 목표 여부 검증 (화력 1단 증가만 지원, 감소/종료 및 다단계/부정은 미지원)."""
-    text = user_input.lower().strip()
-    # 부정/금지 및 P0 범위 밖 단계 요청은 실제 조작으로 변환하지 않는다.
-    if re.search(r"(?:하지|주지|리지|시키지|지)\s*마|말아|말고|않|안\s*(?:올|높|켜|시작|증가)", text):
-        return False
-    if re.search(r"(?:[02-9]\d*|1\d+)\s*(?:단|단계)|(?:두|세|네|다섯|여섯|일곱|여덟|아홉|열)\s*(?:단계|단|번)", text):
-        return False
-    unsupported_keywords = [
-        "꺼",
-        "종료",
-        "꺼줘",
-        "내려",
-        "감소",
-        "낮춰",
-        "줄여",
-        "정지",
-        "차단",
-        "off",
-        "중단",
-    ]
-    for kw in unsupported_keywords:
-        if kw in text:
-            return False
-
-    supported_keywords = [
-        "올려",
-        "증가",
-        "높여",
-        "키워",
-        "1단",
-        "한 단계",
-        "켜",
-        "시작",
-        "+",
-    ]
-    return any(kw in text for kw in supported_keywords)
+class StepRequest(AckRequest):
+    """Bind observation requests to the acknowledged action, including retries."""
 
 
 class RunState(BaseModel):
@@ -96,6 +62,7 @@ class RunState(BaseModel):
     current_action_id: str | None = None
     seen_action_ids: list[str] = []
     last_acked_action_id: str | None = None
+    stepped_action_ids: list[str] = []
     retry_count: int = 0
     generation: int = 1
     action_window_start_ms: int = 500
@@ -176,7 +143,22 @@ class RunStore:
                 if self._active_run_id == state.run_id:
                     self._active_run_id = None
                 return True
+        elif state.status == "observing":
+            if (now - state.status_updated_at).total_seconds() >= TIMEOUT_OBSERVING_SECONDS:
+                self._finish_observation_error(state, "observation_timeout")
+                return True
         return False
+
+    def _finish_observation_error(self, state: RunState, reason: str) -> None:
+        # Caller holds the store lock. Never expose exception text or fabricate sensor evidence.
+        state.status = "uncertain"
+        state.verdict = Verdict(status="uncertain", verification_level="none",
+                                goal_satisfied=None, reason_codes=[reason], evidence_ids=[])
+        state.status_updated_at = self._now_utc()
+        state.generation += 1
+        self._add_event(state, "error", "관측 결과를 확인할 수 없습니다. 추가 조작을 멈추고 인덕션 상태를 직접 확인해 주세요.", state.last_acked_action_id)
+        if self._active_run_id == state.run_id:
+            self._active_run_id = None
 
     def create_run(self, req: CreateRunRequest) -> CreateRunResponse:
         with self._lock:
@@ -206,22 +188,18 @@ class RunStore:
             run_id = f"run-{uuid.uuid4().hex[:8]}"
 
             # P1 피드백: 지원 목표 검증 (화력 1단 증가 외에는 + 조작 안내 금지)
-            is_supported = is_supported_p0_goal(req.user_input)
+            goal, clarification = interpret_p0_goal(req.user_input, req.zone_id)
+            is_supported = goal is not None
 
             if not is_supported:
                 initial_status: RunStatus = "awaiting_clarification"
                 instruction: Instruction | None = None
                 current_action_id: str | None = None
                 seen_action_ids: list[str] = []
-            elif req.zone_id is None:
-                initial_status = "awaiting_clarification"
-                instruction = None
-                current_action_id = None
-                seen_action_ids = []
             else:
                 initial_status = "awaiting_user"
                 action_id = f"act-{uuid.uuid4().hex[:6]}"
-                zone_label = "오른쪽" if req.zone_id == "right" else "왼쪽"
+                zone_label = "오른쪽" if goal.zone_id == "right" else "왼쪽"
                 instruction = Instruction(
                     action_id=action_id,
                     text=f"{zone_label} 화구의 + 버튼을 한 번 눌러 주세요.",
@@ -235,7 +213,7 @@ class RunStore:
                 execution_mode="backend_stub",
                 source=req.source,
                 user_input=req.user_input,
-                zone_id=req.zone_id,
+                zone_id=goal.zone_id if goal else req.zone_id,
                 instruction=instruction,
                 current_action_id=current_action_id,
                 seen_action_ids=seen_action_ids,
@@ -256,13 +234,7 @@ class RunStore:
                 self._add_event(
                     state,
                     kind="plan",
-                    message=f"지원하지 않거나 준비되지 않은 목표입니다: '{req.user_input}'. P0에서는 화력 1단 증가('화력 1단 올려줘')만 지원합니다.",
-                )
-            elif req.zone_id is None:
-                self._add_event(
-                    state,
-                    kind="plan",
-                    message="화구가 지정되지 않았습니다. 조작할 화구를 선택해 주세요.",
+                    message=clarification,
                 )
             else:
                 self._add_event(
@@ -280,6 +252,13 @@ class RunStore:
                 status=state.status,
                 execution_mode=state.execution_mode,
             )
+
+    @staticmethod
+    def get_snapshot(state: RunState) -> RunResponse:
+        return RunResponse(run_id=state.run_id, status=state.status,
+                           execution_mode=state.execution_mode, source=state.source,
+                           instruction=state.instruction, verdict=state.verdict,
+                           events=state.events).model_copy(deep=True)
 
     def get_run(self, run_id: str) -> RunResponse:
         with self._lock:
@@ -361,8 +340,9 @@ class RunStore:
                 )
 
             now = self._now_utc()
-            if state.status == "stopped":
-                return CancelResponse(run_id=state.run_id, status="stopped")
+            self._check_and_expire(state, now)
+            if state.status in TERMINAL_STATUSES:
+                return CancelResponse(run_id=state.run_id, status=state.status)
 
             state.status = "stopped"
             state.status_updated_at = now
@@ -382,6 +362,7 @@ class RunStore:
         self,
         run_id: str,
         orchestrator: AgentOrchestrator | None = None,
+        action_id: str | None = None,
     ) -> RunResponse:
         """observing 상태의 실행에 대해 관측 수집 및 의도 검증 사이클 1회를 원자적으로 수행합니다."""
         with self._lock:
@@ -393,6 +374,12 @@ class RunStore:
                     message=f"실행 '{run_id}'을(를) 찾을 수 없습니다.",
                 )
 
+            self._check_and_expire(state, self._now_utc())
+            requested_action = action_id or state.last_acked_action_id
+            if requested_action in state.stepped_action_ids:
+                return self.get_snapshot(state)
+            if state.status in TERMINAL_STATUSES:
+                return self.get_snapshot(state)
             if state.status != "observing":
                 raise RunApiException(
                     status_code=status.HTTP_409_CONFLICT,
@@ -400,22 +387,62 @@ class RunStore:
                     message=f"현재 상태('{state.status}')에서는 관측을 진행할 수 없습니다. observing 상태여야 합니다.",
                 )
 
-            action_id = state.last_acked_action_id or state.current_action_id or "act-unknown"
-            zone = state.zone_id or "right"
-            goal = Goal(zone_id=zone, direction="increase", requested_steps=1)
+            if requested_action != state.last_acked_action_id:
+                raise RunApiException(409, "stale_action", "현재 완료 확인된 조작 ID가 아닙니다.")
+            action_id = requested_action
+            state.stepped_action_ids.append(action_id)
+            goal, _ = interpret_p0_goal(state.user_input, state.zone_id)
+            if goal is None:
+                self._finish_observation_error(state, "goal_validation_failed")
+                return self.get_snapshot(state)
             expected_generation = state.generation
             expected_action_id = action_id
             window_start_ms = state.action_window_start_ms
             window_end_ms = state.action_window_end_ms
+            retry_count = state.retry_count
 
         orch = orchestrator or AgentOrchestrator()
-        verdict, feedback = await orch.execute_observation_and_verification(
-            goal=goal,
-            action_id=action_id,
-            run_id=run_id,
-            window_start_ms=window_start_ms,
-            window_end_ms=window_end_ms,
-        )
+
+        async def collect():
+            verdict, feedback = await orch.execute_observation_and_verification(
+                goal=goal, action_id=action_id, run_id=run_id,
+                window_start_ms=window_start_ms, window_end_ms=window_end_ms,
+            )
+            recovery = None
+            with self._lock:
+                current = self._runs.get(run_id)
+                if current:
+                    self._check_and_expire(current, self._now_utc())
+                valid = current and current.status == "observing" and current.generation == expected_generation
+            if not valid:
+                return verdict, feedback, None
+            if orch.determine_next_status(verdict) == "recovering":
+                recovery = orch.handle_recovery(
+                    goal=goal, verdict=verdict, retry_count=retry_count,
+                    run_id=run_id, action_id=action_id,
+                    window_start_ms=window_start_ms, window_end_ms=window_end_ms,
+                )
+            return verdict, feedback, recovery
+
+        try:
+            # Sensor adapters are synchronous. Keep their waits outside the event loop and store lock.
+            remaining = max(0, TIMEOUT_OBSERVING_SECONDS -
+                            (self._now_utc() - state.status_updated_at).total_seconds())
+            verdict, feedback, rec_res = await asyncio.wait_for(
+                asyncio.to_thread(lambda: asyncio.run(collect())), timeout=remaining,
+            )
+        except (Exception, asyncio.CancelledError) as exc:
+            with self._lock:
+                current = self._runs.get(run_id)
+                if current and current.status == "observing" and current.generation == expected_generation:
+                    reason = "observation_timeout" if isinstance(exc, TimeoutError) else "observation_processing_error"
+                    self._finish_observation_error(current, reason)
+                snapshot = self.get_snapshot(current) if current else None
+            if isinstance(exc, asyncio.CancelledError):
+                raise
+            if snapshot is None:
+                raise RunApiException(404, "unknown_run", "실행을 찾을 수 없습니다.")
+            return snapshot
 
         with self._lock:
             current_state = self._runs.get(run_id)
@@ -425,6 +452,8 @@ class RunStore:
                     code="unknown_run",
                     message=f"실행 '{run_id}'을(를) 찾을 수 없습니다.",
                 )
+
+            self._check_and_expire(current_state, self._now_utc())
 
             # 원자적 세대 및 상태 유효성 재확인:
             # await 도중 취소(stopped), 만료, 다른 조작 진행 등으로 세대나 상태가 변경되었으면
@@ -452,15 +481,6 @@ class RunStore:
             # C-YD-03 오조작 복구 Skill 연계:
             # 유효한 변화 없음(mismatch/none/no_output_change)인 경우에만 recovering 진입
             if next_status == "recovering":
-                rec_res = orch.handle_recovery(
-                    goal=goal,
-                    verdict=verdict,
-                    retry_count=current_state.retry_count,
-                    run_id=run_id,
-                    action_id=action_id,
-                    window_start_ms=window_start_ms,
-                    window_end_ms=window_end_ms,
-                )
                 if rec_res.decision.value == "retry_instruction" and rec_res.instruction is not None:
                     current_state.retry_count += 1
                     current_state.status = "awaiting_user"
@@ -476,7 +496,7 @@ class RunStore:
                         current_state,
                         kind="observation",
                         action_id=action_id,
-                        message="센서 관측 수집 및 검증 완료",
+                        message="관측 처리 종료. 판정 수준과 근거를 확인해 주세요.",
                         evidence_ids=verdict.evidence_ids,
                     )
                     self._add_event(
@@ -514,7 +534,7 @@ class RunStore:
                 current_state,
                 kind="observation",
                 action_id=action_id,
-                message="센서 관측 수집 및 검증 완료",
+                message="관측 처리 종료. 판정 수준과 근거를 확인해 주세요.",
                 evidence_ids=verdict.evidence_ids,
             )
             self._add_event(
@@ -559,8 +579,8 @@ def ack_run(run_id: str, req: AckRequest) -> AckResponse:
 
 
 @router.post("/{run_id}/step", response_model=RunResponse)
-async def step_run(run_id: str) -> RunResponse:
-    return await run_store.execute_observation_step(run_id)
+async def step_run(run_id: str, req: StepRequest) -> RunResponse:
+    return await run_store.execute_observation_step(run_id, action_id=req.action_id)
 
 
 @router.post("/{run_id}/cancel", response_model=CancelResponse)

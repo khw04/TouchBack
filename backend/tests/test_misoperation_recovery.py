@@ -314,6 +314,12 @@ def test_recovery_api_same_adapter_multi_step_retry_lifecycle():
     assert ack2_res.status_code == 200
     assert ack2_res.json()["status"] == "observing"
 
+    # An old observation request arriving after the next ack must not consume the retry window.
+    before = run_store.get_run(run_id).model_dump()
+    duplicate = asyncio.run(run_store.execute_observation_step(run_id, orchestrator=orch, action_id=first_action_id))
+    assert duplicate.status == "observing"
+    assert run_store.get_run(run_id).model_dump() == before
+
     # 5. 2차 관측 step -> 동일한 어댑터의 4500~7500ms 시간창에서 seq 7(RMS 120.0) 관측 -> 1단 증가 성공!
     step2 = asyncio.run(run_store.execute_observation_step(run_id, orchestrator=orch))
     assert step2.status == "succeeded"

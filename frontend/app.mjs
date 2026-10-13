@@ -1,10 +1,10 @@
-import { createApi, freshSpeechItems, TERMINAL } from "./api.mjs?v=14";
-import { createFixture } from "./fixtures.mjs?v=14";
-import { actionFor, claimableSuccess, phaseFor, unverifiedSnapshot, verdictLabel } from "./presentation.mjs?v=14";
-import { eventChange, eventLabel, eventSource } from "./events.mjs?v=14";
-import { canSendAction, connectionLabel } from "./connection.mjs?v=14";
-import { evidenceReport, evidenceFilename } from "./evidence.mjs?v=14";
-import { createReadGate, regressesTerminalState } from "./read-gate.mjs?v=14";
+import { createApi, freshSpeechItems, TERMINAL } from "./api.mjs?v=15";
+import { createFixture } from "./fixtures.mjs?v=15";
+import { actionFor, claimableSuccess, phaseFor, unverifiedSnapshot, verdictLabel } from "./presentation.mjs?v=15";
+import { eventChange, eventLabel, eventSource } from "./events.mjs?v=15";
+import { canSendAction, connectionLabel } from "./connection.mjs?v=15";
+import { evidenceReport, evidenceFilename } from "./evidence.mjs?v=15";
+import { createReadGate, regressesTerminalState } from "./read-gate.mjs?v=15";
 
 const $ = id => document.getElementById(id);
 const params = new URLSearchParams(location.search);
@@ -12,6 +12,7 @@ const fixtureMode = params.get("fixture") === "1";
 const api = fixtureMode ? createFixture() : createApi(params.get("api") || "");
 const state = { runId: null, run: null, busy: false, connection: "unknown", lastConfirmedAt: null,
   startUnknown: false, seen: new Set(), renderedEventIds: [], lastSpoken: "", polling: null, submittedRequest: null };
+const observationRequests = new Set();
 const reads = createReadGate(() => state.runId);
 const statusText = {
   planning: "계획 중", awaiting_clarification: "추가 확인 필요", awaiting_user: "사용자 조작 대기",
@@ -160,7 +161,27 @@ function render(run, announce = true) {
     if (announce && $("auto-speech").checked) speak(state.lastSpoken);
   }
   if (TERMINAL.has(run.status)) stopPolling();
+  else if (!fixtureMode && run.status === "observing") observe(run);
   controls();
+}
+function observe(run) {
+  const actionId = run.instruction?.action_id;
+  if (!actionId) { markInvalid("관측할 조작 ID가 없습니다. 상태를 다시 확인하세요."); return; }
+  const key = `${run.run_id}:${actionId}`;
+  if (observationRequests.has(key)) return;
+  observationRequests.add(key);
+  // Keep cancellation available while observation is pending. A late result must not undo it.
+  api.step(run.run_id, actionId).then(result => {
+    if (state.runId !== run.run_id || state.run?.status !== "observing" ||
+        state.run.instruction?.action_id !== actionId) return;
+    reads.invalidate();
+    render(result);
+    clearError();
+  }).catch(error => {
+    if (state.runId === run.run_id && state.run?.status === "observing") {
+      markUnverified(`관측 요청 결과를 확인할 수 없습니다. 상태 다시 확인을 누르세요. ${error.message}`);
+    }
+  });
 }
 function stopPolling() { if (state.polling) clearInterval(state.polling); state.polling = null; }
 async function refresh(allowBusy = false) {

@@ -57,34 +57,44 @@ function validateAction(data, expectedId, accepted = false) {
   return data;
 }
 
-export function createApi(baseUrl = "", fetchImpl = fetch) {
+export function createApi(baseUrl = "", fetchImpl = fetch, { timeoutMs = 15000 } = {}) {
   const root = baseUrl.replace(/\/$/, "");
   async function request(path, method = "GET", body) {
-    let response;
-    try {
-      response = await fetchImpl(`${root}${path}`, {
-        method,
-        headers: body ? { "Content-Type": "application/json" } : {},
-        body: body ? JSON.stringify(body) : undefined,
-        cache: "no-store",
-      });
-    } catch {
-      throw new ApiError("서버에 연결할 수 없습니다. 주소와 서버 실행 상태를 확인하세요.");
-    }
-    let data;
-    try { data = await response.json(); }
-    catch { throw new ApiError("서버 응답을 읽을 수 없습니다.", "invalid_response", response.status); }
-    if (!response.ok) throw new ApiError(record(data) && filled(data.message) ? data.message : "요청에 실패했습니다.",
-      record(data) && filled(data.code) ? data.code : "server_error", response.status);
-    return data;
+    const controller = new AbortController();
+    let timer;
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        controller.abort();
+        reject(new ApiError("서버 요청 시간이 초과됐습니다. 상태를 다시 확인하세요."));
+      }, timeoutMs);
+    });
+    const operation = async () => {
+      let response;
+      try {
+        response = await fetchImpl(`${root}${path}`, {
+          method, signal: controller.signal,
+          headers: body ? { "Content-Type": "application/json" } : {},
+          body: body ? JSON.stringify(body) : undefined, cache: "no-store",
+        });
+      } catch { throw new ApiError("서버에 연결할 수 없습니다. 주소와 서버 실행 상태를 확인하세요."); }
+      let data;
+      try { data = await response.json(); }
+      catch { throw new ApiError("서버 응답을 읽을 수 없습니다.", "invalid_response", response.status); }
+      if (!response.ok) throw new ApiError(record(data) && filled(data.message) ? data.message : "요청에 실패했습니다.",
+        record(data) && filled(data.code) ? data.code : "server_error", response.status);
+      return data;
+    };
+    try { return await Promise.race([operation(), timeout]); }
+    finally { clearTimeout(timer); }
   }
   return {
     start: async (user_input, source, zone_id) => validateStart(await request("/api/runs", "POST", { user_input, source, zone_id })),
     get: async runId => validateRun(await request(`/api/runs/${encodeURIComponent(runId)}`), runId),
     ack: async (runId, actionId) => validateAction(await request(`/api/runs/${encodeURIComponent(runId)}/ack`, "POST", { action_id: actionId }), runId, true),
+    step: async (runId, actionId) => validateRun(await request(`/api/runs/${encodeURIComponent(runId)}/step`, "POST", { action_id: actionId }), runId),
     cancel: async runId => {
       const response = validateAction(await request(`/api/runs/${encodeURIComponent(runId)}/cancel`, "POST"), runId);
-      if (response.status !== "stopped") invalid("취소 요청 뒤 종료 상태가 아닙니다.");
+      if (!TERMINAL.has(response.status)) invalid("취소 요청 뒤 종료 상태가 아닙니다.");
       return response;
     },
   };
