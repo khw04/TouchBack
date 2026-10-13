@@ -260,3 +260,68 @@ def test_negated_or_out_of_scope_goal_requires_clarification(user_input):
     result = client.get("/api/runs/" + response.json()["run_id"]).json()
     assert result["status"] == "awaiting_clarification"
     assert result["instruction"] is None
+
+
+def test_run_step_unconfigured_sensor_returns_uncertain():
+    """기본 미설정 센서 환경에서 step 호출 시 안전하게 uncertain 판정 및 락 해제 (C-YD-02)."""
+    create_res = client.post("/api/runs", json={"user_input": "화력 1단 올려줘", "source": "mock", "zone_id": "right"})
+    assert create_res.status_code == 201
+    run_id = create_res.json()["run_id"]
+    action_id = client.get(f"/api/runs/{run_id}").json()["instruction"]["action_id"]
+
+    # 1. ack -> observing
+    ack_res = client.post(f"/api/runs/{run_id}/ack", json={"action_id": action_id})
+    assert ack_res.status_code == 200
+    assert ack_res.json()["status"] == "observing"
+
+    # 2. step -> 미설정 센서이므로 uncertain 종료
+    step_res = client.post(f"/api/runs/{run_id}/step")
+    assert step_res.status_code == 200
+    step_data = step_res.json()
+    assert step_data["status"] == "uncertain"
+    assert step_data["verdict"] is not None
+    assert step_data["verdict"]["status"] == "uncertain"
+    assert any("결과를 확인할 수 없습니다" in e["message"] for e in step_data["events"])
+
+    # 3. 락 해제 확인: 새 실행 생성 가능
+    new_res = client.post("/api/runs", json={"user_input": "화력 1단 올려줘", "source": "mock", "zone_id": "left"})
+    assert new_res.status_code == 201
+
+
+def test_run_step_with_mock_orchestrator_returns_succeeded():
+    """Mock 센서 어댑터가 연결된 오케스트레이터로 step 실행 시 정상 1단계 성공 (C-YD-02)."""
+    import asyncio
+    from app.adapters.mock_setup import build_mock_adapter
+    from app.agent.orchestrator import AgentOrchestrator
+
+    create_res = client.post("/api/runs", json={"user_input": "화력 1단 올려줘", "source": "mock", "zone_id": "right"})
+    run_id = create_res.json()["run_id"]
+    action_id = client.get(f"/api/runs/{run_id}").json()["instruction"]["action_id"]
+
+    client.post(f"/api/runs/{run_id}/ack", json={"action_id": action_id})
+
+    # Mock 어댑터 오케스트레이터 주입
+    mock_orch = AgentOrchestrator(adapter=build_mock_adapter("normal", zone_id="right"))
+    res = asyncio.run(run_store.execute_observation_step(run_id, orchestrator=mock_orch))
+
+    assert res.status == "succeeded"
+    assert res.verdict is not None
+    assert res.verdict.status == "success"
+    assert res.verdict.verification_level == "exact_step"
+    assert res.verdict.goal_satisfied is True
+    assert any("화력이 한 단계 올라갔습니다" in e.message for e in res.events)
+
+    # 락 해제 확인
+    new_res = client.post("/api/runs", json={"user_input": "화력 1단 올려줘", "source": "mock", "zone_id": "left"})
+    assert new_res.status_code == 201
+
+
+def test_run_step_requires_observing_status():
+    """observing이 아닌 상태에서 step 호출 시 409 conflict 차단."""
+    create_res = client.post("/api/runs", json={"user_input": "화력 1단 올려줘", "source": "mock", "zone_id": "right"})
+    run_id = create_res.json()["run_id"]
+
+    # 아직 awaiting_user 상태
+    step_res = client.post(f"/api/runs/{run_id}/step")
+    assert step_res.status_code == 409
+    assert "observing 상태여야 합니다" in step_res.json()["message"]
