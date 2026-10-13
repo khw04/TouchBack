@@ -1,10 +1,10 @@
-import { createApi, freshSpeechItems, TERMINAL } from "./api.mjs?v=13";
-import { createFixture } from "./fixtures.mjs?v=9";
-import { actionFor, claimableSuccess, phaseFor, unverifiedSnapshot, verdictLabel } from "./presentation.mjs?v=13";
-import { eventChange, eventLabel, eventSource } from "./events.mjs";
-import { canSendAction, connectionLabel } from "./connection.mjs";
-import { evidenceReport, evidenceFilename } from "./evidence.mjs";
-import { createReadGate, regressesTerminalState } from "./read-gate.mjs";
+import { createApi, freshSpeechItems, TERMINAL } from "./api.mjs?v=14";
+import { createFixture } from "./fixtures.mjs?v=14";
+import { actionFor, claimableSuccess, phaseFor, unverifiedSnapshot, verdictLabel } from "./presentation.mjs?v=14";
+import { eventChange, eventLabel, eventSource } from "./events.mjs?v=14";
+import { canSendAction, connectionLabel } from "./connection.mjs?v=14";
+import { evidenceReport, evidenceFilename } from "./evidence.mjs?v=14";
+import { createReadGate, regressesTerminalState } from "./read-gate.mjs?v=14";
 
 const $ = id => document.getElementById(id);
 const params = new URLSearchParams(location.search);
