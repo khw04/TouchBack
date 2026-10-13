@@ -1,5 +1,6 @@
 """TouchBack backend server with runs API and frontend static mount."""
 from pathlib import Path
+import mimetypes
 from typing import Literal
 
 from fastapi import FastAPI, Request, status
@@ -40,6 +41,9 @@ async def validation_exception_handler(_: Request, exc: RequestValidationError) 
 
 
 app.include_router(runs_router)
+
+# Windows MIME registry may label .mjs as text/plain; browsers require JavaScript for modules.
+mimetypes.add_type("text/javascript", ".mjs")
 
 # Mount frontend directory for browser UI
 frontend_dir = Path(__file__).resolve().parent.parent.parent / "frontend"
