@@ -1,14 +1,17 @@
-"""Execution API (C-YD-00, C-YD-02, C-YD-03): run lifecycle, concurrency lock, timeouts, ack, cancel, and observation step."""
+"""Execution API (C-YD-00, C-YD-02, C-YD-03, C-YD-04): run lifecycle, concurrency lock, timeouts, ack, cancel, observation step, and LLM/adapter integration."""
 from datetime import datetime, timezone
 import asyncio
+import concurrent.futures
 import threading
 import uuid
-from typing import Callable, Literal
+from typing import Any, Callable, Coroutine, Literal
 
 from fastapi import APIRouter, status
 from pydantic import BaseModel
 
+from app.adapters.mock_setup import build_mock_adapter
 from app.agent.orchestrator import AgentOrchestrator
+from app.config import settings
 from app.contracts.goal_policy import interpret_p0_goal
 from app.contracts.models import (
     AckRequest,
@@ -25,11 +28,37 @@ from app.contracts.models import (
     Verdict,
     Zone,
 )
+from app.llm.factory import get_llm_provider
 
 TERMINAL_STATUSES: set[RunStatus] = {"succeeded", "uncertain", "stopped", "failed"}
 TIMEOUT_OBSERVING_SECONDS = 10
 TIMEOUT_AWAITING_USER_SECONDS = 60
 TIMEOUT_AWAITING_CLARIFICATION_SECONDS = 120
+
+
+def run_sync(coro: Coroutine[Any, Any, Any], timeout: float = 10.0) -> Any:
+    """Safely execute a coroutine from synchronous code, even within existing event loops."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop and loop.is_running():
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(asyncio.run, coro).result(timeout=timeout)
+    else:
+        return asyncio.run(coro)
+
+
+def resolve_adapter_for_run(state: "RunState") -> Any | None:
+    """Return appropriate observation adapter based on run source and execution mode."""
+    if state.source == "mock":
+        if state.execution_mode == "backend_stub":
+            # Keep unconfigured adapter behavior for backend_stub to preserve contract regression
+            return None
+        zone = state.zone_id if state.zone_id in ("right", "left") else "right"
+        return build_mock_adapter("normal", zone_id=zone)
+    return None
 
 
 class RunApiException(Exception):
@@ -186,10 +215,50 @@ class RunStore:
                 self._active_run_id = None
 
             run_id = f"run-{uuid.uuid4().hex[:8]}"
+            exec_mode: ExecutionMode = settings.execution_mode
+
+            # real_llm 모드에서 API 키가 누락된 경우 명시적 오류/대기 처리 (모의 모델로 속이지 않음)
+            if exec_mode == "real_llm" and not settings.openai_api_key.strip():
+                state = RunState(
+                    run_id=run_id,
+                    status="failed",
+                    execution_mode="real_llm",
+                    source=req.source,
+                    user_input=req.user_input,
+                    zone_id=req.zone_id,
+                    instruction=None,
+                    current_action_id=None,
+                    seen_action_ids=[],
+                    retry_count=0,
+                    generation=1,
+                    created_at=now,
+                    status_updated_at=now,
+                )
+                self._add_event(
+                    state,
+                    kind="plan",
+                    message=f"목표 수신: {req.user_input} (출처: {req.source}, 화구: {req.zone_id or '미지정'})",
+                )
+                self._add_event(
+                    state,
+                    kind="error",
+                    message="OPENAI_API_KEY가 설정되지 않아 실제 LLM을 호출할 수 없습니다 (provider_waiting). 환경설정을 확인해 주세요.",
+                )
+                self._runs[run_id] = state
+                self._active_run_id = None
+                return CreateRunResponse(
+                    run_id=run_id,
+                    status=state.status,
+                    execution_mode=state.execution_mode,
+                )
 
             # P1 피드백: 지원 목표 검증 (화력 1단 증가 외에는 + 조작 안내 금지)
             goal, clarification = interpret_p0_goal(req.user_input, req.zone_id)
             is_supported = goal is not None
+
+            executed_tool_calls: list[dict[str, Any]] = []
+            plan_detail_msg: str | None = None
+            usage_msg: str | None = None
 
             if not is_supported:
                 initial_status: RunStatus = "awaiting_clarification"
@@ -199,18 +268,36 @@ class RunStore:
             else:
                 initial_status = "awaiting_user"
                 action_id = f"act-{uuid.uuid4().hex[:6]}"
-                zone_label = "오른쪽" if goal.zone_id == "right" else "왼쪽"
-                instruction = Instruction(
-                    action_id=action_id,
-                    text=f"{zone_label} 화구의 + 버튼을 한 번 눌러 주세요.",
-                )
                 current_action_id = action_id
                 seen_action_ids = [action_id]
+
+                if exec_mode in ("mock_llm", "real_llm"):
+                    provider = get_llm_provider(mode=exec_mode)
+                    orch = AgentOrchestrator(llm_provider=provider)
+                    try:
+                        _, instruction, plan_detail_msg, executed_tool_calls = run_sync(
+                            orch.plan_and_instruct(req.user_input, req.zone_id, action_id)
+                        )
+                        if orch.usage.call_count > 0:
+                            usage_msg = orch.usage.to_event_message()
+                    except Exception as exc:
+                        zone_label = "오른쪽" if goal.zone_id == "right" else "왼쪽"
+                        instruction = Instruction(
+                            action_id=action_id,
+                            text=f"{zone_label} 화구의 + 버튼을 한 번 눌러 주세요.",
+                        )
+                        plan_detail_msg = f"LLM 호출 중단({type(exc).__name__}), 안전 기본 안내 적용"
+                else:
+                    zone_label = "오른쪽" if goal.zone_id == "right" else "왼쪽"
+                    instruction = Instruction(
+                        action_id=action_id,
+                        text=f"{zone_label} 화구의 + 버튼을 한 번 눌러 주세요.",
+                    )
 
             state = RunState(
                 run_id=run_id,
                 status=initial_status,
-                execution_mode="backend_stub",
+                execution_mode=exec_mode,
                 source=req.source,
                 user_input=req.user_input,
                 zone_id=goal.zone_id if goal else req.zone_id,
@@ -237,12 +324,34 @@ class RunStore:
                     message=clarification,
                 )
             else:
-                self._add_event(
-                    state,
-                    kind="instruction",
-                    message=instruction.text,
-                    action_id=current_action_id,
-                )
+                for tc in executed_tool_calls:
+                    self._add_event(
+                        state,
+                        kind="tool_call",
+                        message=f"도구 '{tc['name']}' 실행 완료",
+                        action_id=current_action_id,
+                    )
+                if plan_detail_msg:
+                    self._add_event(
+                        state,
+                        kind="plan",
+                        message=plan_detail_msg,
+                        action_id=current_action_id,
+                    )
+                if usage_msg:
+                    self._add_event(
+                        state,
+                        kind="plan",
+                        message=f"LLM 계획 토큰 메트릭: {usage_msg}",
+                        action_id=current_action_id,
+                    )
+                if instruction:
+                    self._add_event(
+                        state,
+                        kind="instruction",
+                        message=instruction.text,
+                        action_id=current_action_id,
+                    )
 
             self._runs[run_id] = state
             self._active_run_id = run_id
@@ -401,7 +510,12 @@ class RunStore:
             window_end_ms = state.action_window_end_ms
             retry_count = state.retry_count
 
-        orch = orchestrator or AgentOrchestrator()
+        if orchestrator is not None:
+            orch = orchestrator
+        else:
+            adapter = resolve_adapter_for_run(state)
+            provider = get_llm_provider(mode=state.execution_mode)
+            orch = AgentOrchestrator(llm_provider=provider, adapter=adapter)
 
         async def collect():
             verdict, feedback = await orch.execute_observation_and_verification(
@@ -422,6 +536,10 @@ class RunStore:
                     run_id=run_id, action_id=action_id,
                     window_start_ms=window_start_ms, window_end_ms=window_end_ms,
                 )
+                if recovery.decision.value == "retry_instruction":
+                    inst, msg = await orch.replan_recovery_with_llm(goal, recovery)
+                    recovery.instruction = inst
+                    recovery.message = msg
             return verdict, feedback, recovery
 
         try:
@@ -506,6 +624,13 @@ class RunStore:
                         message=rec_res.message,
                         evidence_ids=verdict.evidence_ids,
                     )
+                    if hasattr(orch, "usage") and orch.usage.call_count > 0:
+                        self._add_event(
+                            current_state,
+                            kind="plan",
+                            action_id=rec_res.instruction.action_id,
+                            message=f"LLM 복구 토큰 메트릭: {orch.usage.to_event_message()}",
+                        )
                     return RunResponse(
                         run_id=current_state.run_id,
                         status=current_state.status,
@@ -544,6 +669,13 @@ class RunStore:
                 message=feedback,
                 evidence_ids=verdict.evidence_ids,
             )
+            if hasattr(orch, "usage") and orch.usage.call_count > 0:
+                self._add_event(
+                    current_state,
+                    kind="plan",
+                    action_id=action_id,
+                    message=f"LLM 관측/복구 토큰 메트릭: {orch.usage.to_event_message()}",
+                )
 
             if next_status in TERMINAL_STATUSES and self._active_run_id == run_id:
                 self._active_run_id = None

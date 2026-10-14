@@ -13,6 +13,30 @@ class MissingApiKeyError(Exception):
     pass
 
 
+class LlmAuthenticationError(Exception):
+    """Raised when the LLM provider returns a 401 Unauthorized status."""
+
+    pass
+
+
+class LlmRateLimitError(Exception):
+    """Raised when the LLM provider returns a 429 Rate Limit / Quota Exceeded status."""
+
+    pass
+
+
+class LlmTimeoutError(Exception):
+    """Raised when an LLM provider request times out."""
+
+    pass
+
+
+class LlmProviderError(Exception):
+    """Raised when an unexpected error occurs during LLM provider communication."""
+
+    pass
+
+
 class OpenAiProvider(BaseLlmProvider):
     """Real OpenAI provider making external requests and tracking token usage."""
 
@@ -43,14 +67,37 @@ class OpenAiProvider(BaseLlmProvider):
             "messages": messages,
         }
 
+        if getattr(self.settings, "openai_reasoning_effort", None):
+            payload["reasoning_effort"] = self.settings.openai_reasoning_effort
+
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(self.api_url, headers=headers, json=payload)
-            response.raise_for_status()
-            data = response.json()
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(self.api_url, headers=headers, json=payload)
+                response.raise_for_status()
+                data = response.json()
+        except httpx.TimeoutException as exc:
+            raise LlmTimeoutError("OpenAI API 호출 시간이 초과되었습니다 (30초).") from exc
+        except httpx.HTTPStatusError as exc:
+            status_code = exc.response.status_code
+            if status_code == 401:
+                raise LlmAuthenticationError(
+                    "OpenAI API 인증에 실패했습니다 (401 Unauthorized). API 키를 확인해 주세요."
+                ) from exc
+            if status_code == 429:
+                raise LlmRateLimitError(
+                    "OpenAI API 사용 한도 초과 또는 요청 제한에 도달했습니다 (429 Rate Limit)."
+                ) from exc
+            raise LlmProviderError(
+                f"OpenAI API 통신 오류 발생 (HTTP {status_code}): {exc.response.text}"
+            ) from exc
+        except httpx.RequestError as exc:
+            raise LlmProviderError(
+                f"OpenAI API 요청 네트워크 오류 발생: {str(exc)}"
+            ) from exc
 
         # Parse token usage
         usage_data = data.get("usage", {})
