@@ -15,7 +15,7 @@ python -m venv .venv
 
 브라우저에서 http://127.0.0.1:8000/health 또는 http://127.0.0.1:8000/docs 를 연다.
 기본 화면은 `http://127.0.0.1:8000/`, 화면 연습은 `http://127.0.0.1:8000/?fixture=1`이다. 정적 파일은 `/frontend/`가 아닌 `/`에서 제공한다.
-현재 `/api/runs`는 backend_stub 모드로 POST/GET/ack/step/cancel을 제공한다. live 출처는 미준비 오류로 거부하고 미지원·부정·다단계 목표는 조작 안내 없이 명확화한다. `/ack`는 observing으로 전환할 뿐 `/step`을 자동 실행하지 않는다. `/step`은 관측·검증 코드를 호출하지만 기본 Agent에는 센서 어댑터가 없다. 실제 LLM·관측의 운영 연결은 후속 작업이다. 모델 API 키가 없어도 서버와 테스트를 실행할 수 있다.
+현재 `/api/runs`는 backend_stub 모드로 POST/GET/ack/step/cancel을 제공한다. live 출처는 미준비 오류로 거부하고 미지원·부정·다단계 목표는 조작 안내 없이 명확화한다. `/ack`는 observing으로 전환하고 화면이 같은 action_id의 `/step`을 요청한다. `/step`은 중복 처리를 막고 관측·검증·복구를 10초 안에 처리한다. 기본 Agent에는 센서 어댑터가 없어 `uncertain`으로 종료한다. 종료 상태의 취소는 기존 결과를 보존한다. 실제 LLM·관측의 운영 연결은 후속 작업이다. 모델 API 키가 없어도 서버와 테스트를 실행할 수 있다.
 운영 의존성만 설치할 때는 `backend/requirements.txt`를 사용한다. 개발 파일은 테스트 의존성까지 포함한 고정 버전 목록이다.
 
 ## 검증

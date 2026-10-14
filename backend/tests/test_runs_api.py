@@ -275,7 +275,7 @@ def test_run_step_unconfigured_sensor_returns_uncertain():
     assert ack_res.json()["status"] == "observing"
 
     # 2. step -> 미설정 센서이므로 uncertain 종료
-    step_res = client.post(f"/api/runs/{run_id}/step")
+    step_res = client.post(f"/api/runs/{run_id}/step", json={"action_id": client.get(f"/api/runs/{run_id}").json()["instruction"]["action_id"]})
     assert step_res.status_code == 200
     step_data = step_res.json()
     assert step_data["status"] == "uncertain"
@@ -322,6 +322,6 @@ def test_run_step_requires_observing_status():
     run_id = create_res.json()["run_id"]
 
     # 아직 awaiting_user 상태
-    step_res = client.post(f"/api/runs/{run_id}/step")
+    step_res = client.post(f"/api/runs/{run_id}/step", json={"action_id": client.get(f"/api/runs/{run_id}").json()["instruction"]["action_id"]})
     assert step_res.status_code == 409
     assert "observing 상태여야 합니다" in step_res.json()["message"]

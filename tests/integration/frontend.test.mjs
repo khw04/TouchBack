@@ -289,3 +289,58 @@ test("downloaded server record distinguishes stale snapshot and stub", () => {
   assert.equal(evidenceFilename(report), "touchback-server_response-r_1.json");
   assert.equal(evidenceReport({ ...run, execution_mode: "backend_stub" }).classification, "backend_stub");
 });
+
+test("fixture follows the shared safe-goal regression vectors", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const cases = JSON.parse(await readFile(new URL("./goal-cases.json", import.meta.url), "utf8"));
+  for (const entry of cases) {
+    const goal = fixtureGoal(entry.text, entry.selected);
+    assert.equal(goal.zone, entry.zone, entry.text);
+    const run = await createFixture().start(entry.text, "mock", entry.selected);
+    assert.equal(run.status, entry.zone ? "awaiting_user" : "awaiting_clarification", entry.text);
+    assert.equal(Boolean(run.instruction), Boolean(entry.zone), entry.text);
+  }
+});
+
+test("observation step carries the acknowledged action and validates run response", async () => {
+  const calls = [];
+  const run = { run_id: "r1", status: "uncertain", execution_mode: "backend_stub", source: "mock",
+    instruction: null, verdict: { status: "uncertain", reason_codes: ["sensor_adapter_unconfigured"], evidence_ids: [] }, events: [] };
+  const api = createApi("", async (url, options) => { calls.push([url, options]); return { ok: true, json: async () => run }; });
+  assert.deepEqual(await api.step("r1", "a1"), run);
+  assert.equal(calls[0][0], "/api/runs/r1/step");
+  assert.equal(calls[0][1].method, "POST");
+  assert.deepEqual(JSON.parse(calls[0][1].body), { action_id: "a1" });
+});
+
+test("cancel accepts every preserved terminal state but rejects nonterminal replies", async () => {
+  for (const status of ["succeeded", "uncertain", "failed", "stopped"]) {
+    const api = createApi("", async () => ({ ok: true, json: async () => ({ run_id: "r1", status }) }));
+    assert.equal((await api.cancel("r1")).status, status);
+  }
+});
+
+test("requests and response bodies have a deadline even if transport ignores abort", async () => {
+  for (const transport of [
+    async () => new Promise(() => {}),
+    async () => ({ ok: true, json: async () => new Promise(() => {}) }),
+  ]) {
+    let signal;
+    const api = createApi("", (url, options) => { signal = options.signal; return transport(); }, { timeoutMs: 10 });
+    await assert.rejects(api.step("r1", "a1"), error => error.code === "connection");
+    assert.equal(signal.aborted, true);
+  }
+});
+
+test("fixture cancellation preserves its completed verdict and repeated cancellation", async () => {
+  const fixture = createFixture();
+  const run = await fixture.start("화력 올려줘", "mock", "right");
+  const final = await fixture.ack(run.run_id, run.instruction.action_id);
+  assert.equal(final.status, "uncertain");
+  assert.deepEqual(await fixture.cancel(run.run_id), final);
+  assert.deepEqual(await fixture.cancel(run.run_id), final);
+  const active = await fixture.start("화력 올려줘", "mock", "right");
+  const stopped = await fixture.cancel(active.run_id);
+  assert.equal(stopped.status, "stopped");
+  assert.deepEqual(await fixture.cancel(active.run_id), stopped);
+});
