@@ -158,3 +158,116 @@ def test_openai_provider_exception_types():
     assert issubclass(LlmRateLimitError, Exception)
     assert issubclass(LlmTimeoutError, Exception)
     assert issubclass(LlmProviderError, Exception)
+
+
+def test_instruction_validation_against_goal_mismatches():
+    """[P1 회귀] Goal과 불일치하는 화구·방향·횟수의 LLM 안내는 차단되고 안전 기본 안내가 적용되어야 함."""
+    async def _run():
+        goal = Goal(zone_id="right", direction="increase", requested_steps=1)
+        fallback_expected = "오른쪽 화구의 + 버튼을 한 번 눌러 주세요."
+
+        # 1. 잘못된 화구 (요청은 오른쪽인데 모델이 왼쪽 응답)
+        mock_llm1 = MockLlmProvider()
+        mock_llm1.queue_text("왼쪽 화구의 + 버튼을 다섯 번 눌러 주세요.")
+        orch1 = AgentOrchestrator(llm_provider=mock_llm1)
+        _, inst1, plan_msg1, _ = await orch1.plan_and_instruct("오른쪽 화력 1단 올려줘", zone_id="right")
+        assert inst1.text == fallback_expected
+        assert "안전 검증 불일치" in plan_msg1
+
+        # 2. 잘못된 방향 (화력 증가 목표인데 모델이 - 버튼 응답)
+        mock_llm2 = MockLlmProvider()
+        mock_llm2.queue_text("오른쪽 화구의 - 버튼을 세 번 눌러 주세요.")
+        orch2 = AgentOrchestrator(llm_provider=mock_llm2)
+        _, inst2, plan_msg2, _ = await orch2.plan_and_instruct("오른쪽 화력 1단 올려줘", zone_id="right")
+        assert inst2.text == fallback_expected
+        assert "안전 검증 불일치" in plan_msg2
+
+        # 3. 잘못된 횟수 (1단 증가인데 모델이 3번 누름 응답)
+        mock_llm3 = MockLlmProvider()
+        mock_llm3.queue_text("오른쪽 화구의 + 버튼을 3번 눌러 주세요.")
+        orch3 = AgentOrchestrator(llm_provider=mock_llm3)
+        _, inst3, plan_msg3, _ = await orch3.plan_and_instruct("오른쪽 화력 1단 올려줘", zone_id="right")
+        assert inst3.text == fallback_expected
+        assert "안전 검증 불일치" in plan_msg3
+
+        # 4. 올바른 응답은 정상 수락
+        mock_llm4 = MockLlmProvider()
+        valid_text = "안전을 위해 오른쪽 화구의 + 버튼을 한 번 눌러 주세요."
+        mock_llm4.queue_text(valid_text)
+        orch4 = AgentOrchestrator(llm_provider=mock_llm4)
+        _, inst4, plan_msg4, _ = await orch4.plan_and_instruct("오른쪽 화력 1단 올려줘", zone_id="right")
+        assert inst4.text == valid_text
+        assert "LLM 목표 분석 및 조작 안내 수립 완료" in plan_msg4
+
+    asyncio.run(_run())
+
+
+def test_replan_recovery_validation_against_goal_mismatches():
+    """[P1 회귀] 오조작 복구 시에도 잘못된 화구·방향·횟수 응답은 안전 기본 재조작 안내로 대체되어야 함."""
+    async def _run():
+        goal = Goal(zone_id="right", direction="increase", requested_steps=1)
+        fallback_inst = Instruction(action_id="act-rec-val", text="오른쪽 화구의 + 버튼을 한 번 눌러 주세요.")
+        rec_result = RecoveryResult(
+            decision=RecoveryDecisionType.RETRY_INSTRUCTION,
+            next_status="awaiting_user",
+            instruction=fallback_inst,
+            message="1회 재조작 안내",
+        )
+
+        # 1. 잘못된 화구 및 복수 누름
+        mock_llm1 = MockLlmProvider()
+        mock_llm1.queue_text("왼쪽 화구의 + 버튼을 세 번 다시 눌러 주세요.")
+        orch1 = AgentOrchestrator(llm_provider=mock_llm1)
+        inst1, msg1 = await orch1.replan_recovery_with_llm(goal, rec_result)
+        assert inst1.text == fallback_inst.text
+        assert "안전 검증 불일치" in msg1
+
+        # 2. 올바른 복구 안내는 정상 수락
+        mock_llm2 = MockLlmProvider()
+        valid_rec_text = "오른쪽 화구의 + 버튼을 다시 한 번 꼭 눌러 주세요."
+        mock_llm2.queue_text(valid_rec_text)
+        orch2 = AgentOrchestrator(llm_provider=mock_llm2)
+        inst2, msg2 = await orch2.replan_recovery_with_llm(goal, rec_result)
+        assert inst2.text == valid_rec_text
+        assert "LLM 재조작 안내 수립 완료" in msg2
+
+    asyncio.run(_run())
+
+
+def test_orchestrator_raises_fatal_llm_errors():
+    """[P1 회귀] 치명적 모델 오류(인증/한도/타임아웃)는 기본 안내로 대체되지 않고 호출자에게 전파되어야 함."""
+    class FailingProvider:
+        def __init__(self, exc: Exception):
+            self.exc = exc
+        async def generate(self, *args, **kwargs):
+            raise self.exc
+
+    async def _run():
+        errors = [
+            LlmAuthenticationError("401 Unauthorized"),
+            LlmRateLimitError("429 Quota Exceeded"),
+            LlmTimeoutError("Timeout 30s"),
+            MissingApiKeyError("Missing Key"),
+            LlmProviderError("Provider Error"),
+            TimeoutError("asyncio timeout"),
+        ]
+
+        goal = Goal(zone_id="right", direction="increase", requested_steps=1)
+        rec_result = RecoveryResult(
+            decision=RecoveryDecisionType.RETRY_INSTRUCTION,
+            next_status="awaiting_user",
+            instruction=Instruction(action_id="act-rec", text="안내"),
+            message="재시도",
+        )
+
+        for err in errors:
+            orch = AgentOrchestrator(llm_provider=FailingProvider(err))
+            # plan_and_instruct must raise fatal error
+            with pytest.raises(type(err)):
+                await orch.plan_and_instruct("오른쪽 화력 1단 올려줘", zone_id="right")
+
+            # replan_recovery_with_llm must raise fatal error
+            with pytest.raises(type(err)):
+                await orch.replan_recovery_with_llm(goal, rec_result)
+
+    asyncio.run(_run())

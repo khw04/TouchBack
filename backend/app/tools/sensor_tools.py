@@ -80,6 +80,14 @@ class ReadFieldTool(BaseTool):
             )
 
         data = self._provider(zone_id)
+        if data.get("quality") == "invalid":
+            reasons = data.get("reasons", ["invalid_signal"])
+            reason_str = ", ".join(reasons) if isinstance(reasons, list) else str(reasons)
+            return ToolResult(
+                success=False,
+                error=f"화구({zone_id}) 센서 신호 품질 불량: {reason_str}",
+                data=data,
+            )
         return ToolResult(success=True, data=data)
 
 
@@ -146,6 +154,14 @@ class CheckSensorIntegrityTool(BaseTool):
             )
 
         data = self._provider()
+        if not data.get("connected", True) or data.get("quality") == "invalid":
+            reasons = data.get("reasons", ["sensor_disconnected_or_invalid"])
+            reason_str = ", ".join(reasons) if isinstance(reasons, list) else str(reasons)
+            return ToolResult(
+                success=False,
+                error=f"센서 무결성 점검 실패: 연결 또는 신호 상태 이상 ({reason_str})",
+                data=data,
+            )
         return ToolResult(success=True, data=data)
 
 

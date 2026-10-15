@@ -1,4 +1,5 @@
 """Agent Orchestrator (C-YD-02): plan, instruct, observe, and verify intent."""
+import asyncio
 from dataclasses import dataclass
 import json
 from typing import Any
@@ -18,9 +19,71 @@ from app.contracts.models import (
 )
 from app.llm.base import BaseLlmProvider, LlmUsage
 from app.llm.mock_provider import MockLlmProvider
+from app.llm.openai_provider import (
+    LlmAuthenticationError,
+    LlmProviderError,
+    LlmRateLimitError,
+    LlmTimeoutError,
+    MissingApiKeyError,
+)
 from app.tools.base import ToolRegistry, ToolResult
 from app.tools.registry import default_tool_registry
 from app.verification.models import ActionContext
+
+FATAL_LLM_ERRORS = (
+    MissingApiKeyError,
+    LlmAuthenticationError,
+    LlmRateLimitError,
+    LlmTimeoutError,
+    LlmProviderError,
+    TimeoutError,
+    asyncio.TimeoutError,
+)
+
+
+def validate_instruction_against_goal(
+    text: str,
+    goal: Goal,
+    is_recovery: bool = False,
+) -> tuple[bool, str]:
+    """검증된 Goal(화구·방향·횟수)과 LLM 생성 조작 안내 문구를 엄격히 대조합니다."""
+    trimmed = text.strip()
+    if not (5 <= len(trimmed) <= 120):
+        return False, "문장 길이가 허용 범위(5~120자)를 벗어남"
+
+    # 1. 화구 일치성 검증 (지정 화구 필수 포함, 반대 화구 절대 금지)
+    expected_zone_label = "오른쪽" if goal.zone_id == "right" else "왼쪽"
+    conflicting_zone_label = "왼쪽" if goal.zone_id == "right" else "오른쪽"
+
+    if expected_zone_label not in trimmed:
+        return False, f"지정 화구('{expected_zone_label}') 누락"
+    if conflicting_zone_label in trimmed:
+        return False, f"상충되는 반대 화구('{conflicting_zone_label}') 포함"
+
+    # 2. 방향 및 조작 버튼 검증 (P0: 화력 1단 증가만 허용)
+    if goal.direction == "increase":
+        if "+" not in trimmed and "올" not in trimmed:
+            return False, "화력 증가(+) 버튼 안내 누락"
+        forbidden_direction_keywords = ["-", "내려", "줄여", "감소", "꺼", "종료"]
+        for kw in forbidden_direction_keywords:
+            if kw in trimmed:
+                return False, f"화력 증가에 상충되는 조작 키워드('{kw}') 포함"
+
+    # 3. 횟수/스텝 검증 (P0: 1단 증가 = 1회 누름)
+    multi_press_keywords = [
+        "두 번", "세 번", "네 번", "다섯 번", "여섯 번", "일곱 번", "여덟 번", "아홉 번", "열 번",
+        "2번", "3번", "4번", "5번", "6번", "7번", "8번", "9번", "10번",
+        "2회", "3회", "4회", "5회", "여러 번", "연속", "두번", "세번", "다섯번", "반복",
+    ]
+    for kw in multi_press_keywords:
+        if kw in trimmed:
+            return False, f"복수 누름 또는 비정상 횟수 키워드('{kw}') 포함"
+
+    single_press_keywords = ["한 번", "한번", "1번", "1회"]
+    if not any(kw in trimmed for kw in single_press_keywords):
+        return False, "1회 누름 안내('한 번', '1회' 등) 누락"
+
+    return True, "유효한 조작 안내"
 
 
 @dataclass
@@ -163,10 +226,17 @@ class AgentOrchestrator:
 
                 if response.text and response.text.strip():
                     text = response.text.strip()
-                    if len(text) <= 120 and ("+" in text or "버튼" in text or "화구" in text):
+                    is_valid, validation_msg = validate_instruction_against_goal(text, goal)
+                    if is_valid:
                         instruction = Instruction(action_id=act_id, text=text)
                         plan_message = "LLM 목표 분석 및 조작 안내 수립 완료"
+                    else:
+                        instruction = fallback_instruction
+                        plan_message = f"LLM 조작 안내 안전 검증 불일치({validation_msg}), 안전 기본 안내 적용"
                 break
+        except FATAL_LLM_ERRORS:
+            # 치명적 모델 오류(인증/한도/타임아웃 등)는 fallback으로 감추지 않고 명시적으로 호출자에게 전파
+            raise
         except Exception as exc:
             plan_message = f"LLM 호출 중단({type(exc).__name__}), 안전 기본 안내 적용"
 
@@ -202,11 +272,19 @@ class AgentOrchestrator:
             self.usage.record(response.usage, response.model)
             if response.text and response.text.strip():
                 text = response.text.strip()
-                if len(text) <= 120 and ("+" in text or "버튼" in text or "다시" in text):
+                is_valid, validation_msg = validate_instruction_against_goal(text, goal, is_recovery=True)
+                if is_valid:
                     return (
                         Instruction(action_id=fallback_inst.action_id, text=text),
                         "LLM 재조작 안내 수립 완료",
                     )
+                else:
+                    return (
+                        fallback_inst,
+                        f"LLM 복구 안내 안전 검증 불일치({validation_msg}), 기본 재조작 안내 적용",
+                    )
+        except FATAL_LLM_ERRORS:
+            raise
         except Exception:
             pass
 
