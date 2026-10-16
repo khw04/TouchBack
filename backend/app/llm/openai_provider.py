@@ -37,6 +37,12 @@ class LlmProviderError(Exception):
     pass
 
 
+class LlmResponseFormatError(LlmProviderError):
+    """Raised when the LLM provider returns invalid JSON or an invalid response schema."""
+
+    pass
+
+
 class OpenAiProvider(BaseLlmProvider):
     """Real OpenAI provider making external requests and tracking token usage."""
 
@@ -78,7 +84,12 @@ class OpenAiProvider(BaseLlmProvider):
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.post(self.api_url, headers=headers, json=payload)
                 response.raise_for_status()
-                data = response.json()
+                try:
+                    data = response.json()
+                except Exception as exc:
+                    raise LlmResponseFormatError(
+                        f"OpenAI API 응답 JSON 파싱 실패: {str(exc)}"
+                    ) from exc
         except httpx.TimeoutException as exc:
             raise LlmTimeoutError("OpenAI API 호출 시간이 초과되었습니다 (30초).") from exc
         except httpx.HTTPStatusError as exc:
@@ -98,6 +109,29 @@ class OpenAiProvider(BaseLlmProvider):
             raise LlmProviderError(
                 f"OpenAI API 요청 네트워크 오류 발생: {str(exc)}"
             ) from exc
+
+        if not isinstance(data, dict):
+            raise LlmResponseFormatError(
+                f"OpenAI API 응답이 올바른 JSON 객체가 아닙니다: {type(data).__name__}"
+            )
+
+        choices = data.get("choices")
+        if not choices or not isinstance(choices, list) or len(choices) == 0:
+            raise LlmResponseFormatError(
+                "OpenAI API 응답에 choices 항목이 없거나 비어 있습니다."
+            )
+
+        choice = choices[0]
+        if not isinstance(choice, dict):
+            raise LlmResponseFormatError(
+                f"OpenAI API 응답 choice 항목이 올바른 객체가 아닙니다: {type(choice).__name__}"
+            )
+
+        message = choice.get("message")
+        if not isinstance(message, dict):
+            raise LlmResponseFormatError(
+                f"OpenAI API 응답 message 항목이 올바른 객체가 아닙니다: {type(message).__name__}"
+            )
 
         # Parse token usage
         usage_data = data.get("usage", {})

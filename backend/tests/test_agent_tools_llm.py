@@ -10,7 +10,11 @@ from app.llm.factory import get_llm_provider
 from app.llm.mock_provider import MockLlmProvider
 from app.llm.openai_provider import MissingApiKeyError, OpenAiProvider
 from app.tools.base import BaseTool, ToolRegistry, ToolResult
-from app.tools.registry import create_mock_registry, default_tool_registry
+from app.tools.registry import (
+    create_mock_registry,
+    create_registry_from_adapter,
+    default_tool_registry,
+)
 from app.tools.sensor_tools import (
     AwaitTouchResultTool,
     CheckSensorIntegrityTool,
@@ -149,3 +153,56 @@ def test_llm_factory_selection():
 
     real_p = get_llm_provider(mode="real_llm")
     assert isinstance(real_p, OpenAiProvider)
+
+
+def test_create_registry_from_adapter_planning_and_execution():
+    """[P1 회귀] 계획 단계 LLM에는 await_touch_result가 노출되지 않고, 실행 단계에서는 실제 어댑터를 호출해 관측·시계가 갱신되어야 함."""
+    from app.adapters.mock_setup import build_mock_adapter
+    from app.adapters.mock import MockAdapter, VirtualClock
+
+    async def _run():
+        adapter_normal = build_mock_adapter("normal")
+
+        # 1. 계획 단계: for_planning=True 시 await_touch_result 도구 미제공 검증
+        reg_plan = create_registry_from_adapter(adapter_normal, for_planning=True)
+        plan_tools = reg_plan.to_openai_tools()
+        tool_names = [t["function"]["name"] for t in plan_tools]
+        assert "read_field" in tool_names
+        assert "check_sensor_integrity" in tool_names
+        assert "await_touch_result" not in tool_names
+
+        # 2. 실행 단계: for_planning=False 시 실제 adapter.await_touch_result 호출 및 가상 시계 전진 검증
+        reg_exec = create_registry_from_adapter(adapter_normal, for_planning=False)
+        touch_tool = reg_exec.get("await_touch_result")
+        assert touch_tool is not None
+
+        clock_before = adapter_normal.clock.now_ms
+        res_normal = await touch_tool.execute(action_id="act-exec-1", window_ms=3000)
+        clock_after = adapter_normal.clock.now_ms
+        assert clock_after == clock_before + 3000  # 가상 시계 3000ms 전진
+        assert res_normal.success is True
+        # normal 어댑터이므로 실제 도착한 관측의 비프음 반영
+        assert res_normal.data["beep_count"] >= 1
+        assert res_normal.data["field_delta_rms"] > 0.0
+
+        # 3. no_change 어댑터: 고정 가짜값(1비프, 45.2)이 아니라 실제 관측 부재(0비프, 0.0 RMS) 반영 검증
+        adapter_nc = build_mock_adapter("no_change")
+        reg_nc = create_registry_from_adapter(adapter_nc, for_planning=False)
+        touch_tool_nc = reg_nc.get("await_touch_result")
+        res_nc = await touch_tool_nc.execute(action_id="act-nc-1", window_ms=3000)
+        assert res_nc.success is True
+        assert res_nc.data["beep_count"] == 0
+        assert res_nc.data["field_delta_rms"] == 0.0
+        assert res_nc.data["status"] == "valid"
+
+        # 4. 빈 어댑터: missing_samples 반환
+        adapter_empty = MockAdapter([], VirtualClock(now_ms=500))
+        reg_empty = create_registry_from_adapter(adapter_empty, for_planning=False)
+        touch_tool_empty = reg_empty.get("await_touch_result")
+        res_empty = await touch_tool_empty.execute(action_id="act-empty-1", window_ms=3000)
+        assert res_empty.success is True
+        assert res_empty.data["beep_count"] == 0
+        assert res_empty.data["field_delta_rms"] == 0.0
+        assert res_empty.data["status"] == "missing_samples"
+
+    asyncio.run(_run())

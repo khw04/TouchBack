@@ -104,17 +104,25 @@ export function freshSpeechItems(previousIds, run, successClaimable = true) {
   const events = Array.isArray(run.events) ? run.events : [];
   const fresh = events.filter(event => event?.event_id && !previousIds.has(event.event_id));
   const currentActionId = run.status === "awaiting_user" ? run.instruction?.action_id : null;
-  const messages = fresh.filter(event => event.message && (
-    (["instruction", "recovery"].includes(event.kind) && currentActionId &&
-      event.action_id === currentActionId && !previousIds.has(`action:${currentActionId}`)) ||
-    ["verdict", "error"].includes(event.kind)))
-    .map(event => run.status === "succeeded" && !successClaimable && event.kind === "verdict"
-      ? { ...event, message: "서버의 성공 근거가 부족합니다. 인덕션 상태를 직접 확인하세요." } : event);
+  const messages = [];
+  const seenAction = new Set(previousIds);
+  for (const event of fresh) {
+    if (!event || !event.message) continue;
+    if (["instruction", "recovery"].includes(event.kind)) {
+      if (currentActionId && event.action_id === currentActionId && !seenAction.has(`action:${currentActionId}`)) {
+        messages.push(event);
+        seenAction.add(`action:${currentActionId}`);
+      }
+    } else if (["verdict", "error"].includes(event.kind)) {
+      messages.push(run.status === "succeeded" && !successClaimable && event.kind === "verdict"
+        ? { ...event, message: "서버의 성공 근거가 부족합니다. 인덕션 상태를 직접 확인하세요." } : event);
+    }
+  }
   // The current instruction can arrive before its event. Its action ID is the stable fallback key.
-  if (currentActionId && run.instruction.text &&
-      !previousIds.has(`action:${currentActionId}`) &&
-      !messages.some(event => event.action_id === currentActionId)) {
+  if (currentActionId && run.instruction?.text &&
+      !seenAction.has(`action:${currentActionId}`)) {
     messages.push({ event_id: `action:${currentActionId}`, message: run.instruction.text });
+    seenAction.add(`action:${currentActionId}`);
   }
   return { ids: fresh.map(event => event.event_id).concat(
     currentActionId ? [`action:${currentActionId}`] : []), messages };

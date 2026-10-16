@@ -27,22 +27,36 @@ def create_mock_registry(adapter: MockSensorAdapter | None = None) -> ToolRegist
     return registry
 
 
-def create_registry_from_adapter(adapter: Any | None, source: str = "mock") -> ToolRegistry:
-    """주어진 관측 어댑터(MockAdapter 또는 MockSensorAdapter)와 연동된 ToolRegistry를 생성합니다."""
+def create_registry_from_adapter(
+    adapter: Any | None,
+    source: str = "mock",
+    run_id: str | None = None,
+    zone_id: str | None = None,
+    for_planning: bool = False,
+) -> ToolRegistry:
+    """주어진 관측 어댑터(MockAdapter 또는 MockSensorAdapter)와 연동된 ToolRegistry를 생성합니다.
+
+    for_planning=True인 경우 조작 전 사전 점검 도구(read_field, check_sensor_integrity)만 노출합니다.
+    """
     if adapter is None:
         return create_default_registry()
 
     if isinstance(adapter, MockSensorAdapter):
+        if for_planning:
+            reg = ToolRegistry()
+            reg.register(ReadFieldTool(provider=adapter.read_field))
+            reg.register(CheckSensorIntegrityTool(provider=adapter.check_integrity))
+            return reg
         return create_mock_registry(adapter)
 
     registry = ToolRegistry()
 
-    def read_field_provider(zone_id: str) -> dict[str, Any]:
+    def read_field_provider(zid: str) -> dict[str, Any]:
         if hasattr(adapter, "read_baseline"):
-            obs = adapter.read_baseline(zone_id)
+            obs = adapter.read_baseline(zid)
             if obs and obs.device_observation and obs.device_observation.field_summary:
                 return {
-                    "zone_id": zone_id,
+                    "zone_id": zid,
                     "rms": obs.device_observation.field_summary.rms,
                     "unit": obs.device_observation.field_summary.unit,
                     "quality": obs.device_observation.quality.status,
@@ -52,7 +66,7 @@ def create_registry_from_adapter(adapter: Any | None, source: str = "mock") -> T
                 }
             if obs and obs.device_observation:
                 return {
-                    "zone_id": zone_id,
+                    "zone_id": zid,
                     "rms": 0.0,
                     "unit": "adc_count",
                     "quality": obs.device_observation.quality.status,
@@ -61,7 +75,7 @@ def create_registry_from_adapter(adapter: Any | None, source: str = "mock") -> T
                     "source": source,
                 }
         return {
-            "zone_id": zone_id,
+            "zone_id": zid,
             "rms": 0.0,
             "unit": "adc_count",
             "quality": "invalid",
@@ -95,19 +109,77 @@ def create_registry_from_adapter(adapter: Any | None, source: str = "mock") -> T
             "reasons": ["unsupported_adapter"],
         }
 
-    def await_touch_provider(action_id: str, window_ms: int = 3000) -> dict[str, Any]:
+    def await_touch_provider(act_id: str, window_ms: int = 3000) -> dict[str, Any]:
+        if hasattr(adapter, "await_touch_result"):
+            try:
+                now_ms = getattr(getattr(adapter, "clock", None), "now_ms", 500)
+                target_zone = zone_id or "right"
+                baseline_rms = 0.0
+                if hasattr(adapter, "read_baseline"):
+                    base_obs = adapter.read_baseline(target_zone)
+                    if base_obs and base_obs.device_observation and base_obs.device_observation.field_summary:
+                        baseline_rms = base_obs.device_observation.field_summary.rms
+
+                obs_list = adapter.await_touch_result(
+                    run_id=run_id or "run-tool",
+                    action_id=act_id,
+                    zone_id=target_zone,
+                    window_start_ms=now_ms,
+                    window_end_ms=now_ms + window_ms,
+                    timeout_ms=window_ms,
+                )
+                if not obs_list:
+                    return {
+                        "action_id": act_id,
+                        "window_ms": window_ms,
+                        "beep_count": 0,
+                        "field_delta_rms": 0.0,
+                        "status": "missing_samples",
+                        "source": source,
+                    }
+                total_beeps = sum(o.device_observation.beep_count or 0 for o in obs_list if o.device_observation)
+                max_rms = max(
+                    (o.device_observation.field_summary.rms for o in obs_list if o.device_observation and o.device_observation.field_summary),
+                    default=0.0,
+                )
+                field_delta_rms = max(0.0, round(max_rms - baseline_rms, 2))
+
+                last_obs = obs_list[-1]
+                quality_status = last_obs.device_observation.quality.status if last_obs.device_observation else "valid"
+                reasons = last_obs.device_observation.quality.reasons if last_obs.device_observation else []
+                return {
+                    "action_id": act_id,
+                    "window_ms": window_ms,
+                    "beep_count": total_beeps,
+                    "field_delta_rms": field_delta_rms,
+                    "status": quality_status,
+                    "reasons": reasons,
+                    "source": source,
+                }
+            except Exception as exc:
+                return {
+                    "action_id": act_id,
+                    "window_ms": window_ms,
+                    "beep_count": 0,
+                    "field_delta_rms": 0.0,
+                    "status": "invalid",
+                    "reasons": [str(exc)],
+                    "source": source,
+                }
         return {
-            "action_id": action_id,
+            "action_id": act_id,
             "window_ms": window_ms,
-            "beep_count": 1,
-            "field_delta_rms": 45.2,
-            "status": "valid",
+            "beep_count": 0,
+            "field_delta_rms": 0.0,
+            "status": "invalid",
+            "reasons": ["unsupported_adapter"],
             "source": source,
         }
 
     registry.register(ReadFieldTool(provider=read_field_provider))
-    registry.register(AwaitTouchResultTool(provider=await_touch_provider))
     registry.register(CheckSensorIntegrityTool(provider=check_integrity_provider))
+    if not for_planning:
+        registry.register(AwaitTouchResultTool(provider=await_touch_provider))
     return registry
 
 

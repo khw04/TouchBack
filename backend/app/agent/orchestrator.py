@@ -2,6 +2,7 @@
 import asyncio
 from dataclasses import dataclass
 import json
+import re
 from typing import Any
 import uuid
 
@@ -23,6 +24,7 @@ from app.llm.openai_provider import (
     LlmAuthenticationError,
     LlmProviderError,
     LlmRateLimitError,
+    LlmResponseFormatError,
     LlmTimeoutError,
     MissingApiKeyError,
 )
@@ -36,8 +38,12 @@ FATAL_LLM_ERRORS = (
     LlmRateLimitError,
     LlmTimeoutError,
     LlmProviderError,
+    LlmResponseFormatError,
     TimeoutError,
     asyncio.TimeoutError,
+    json.JSONDecodeError,
+    KeyError,
+    IndexError,
 )
 
 
@@ -69,7 +75,30 @@ def validate_instruction_against_goal(
             if kw in trimmed:
                 return False, f"화력 증가에 상충되는 조작 키워드('{kw}') 포함"
 
-    # 3. 횟수/스텝 검증 (P0: 1단 증가 = 1회 누름)
+    # 3. 추가 조작/조건부 조작/연속 조작 키워드 검증
+    # 단일 물리 조작(1회)을 벗어나 서버 관측/재시도 정책을 우회하는 추가/조건부 조작 일체 금지
+    forbidden_extra_action_keywords = [
+        "한 번 더", "한번 더", "한번더", "두 번 더", "더 눌", "추가", "또", "연이어", "이어서",
+        "누르고", "누른 뒤", "누른 후", "누른 다음", "누르시고", "눌렀다가", "누르면", "눌러서",
+        "터치하고", "터치한 뒤", "터치한 후", "터치한 다음", "클릭하고", "클릭한 뒤",
+        "변화가 없으면", "반응이 없으면", "안 되면", "안 켜지면", "작동하지 않으면", "불이 안 들어오면",
+        "안 올라가면", "안 바뀌면", "확인하고 다시", "확인 후 다시", "확인 뒤 다시",
+        "기다렸다가 다시", "기다린 뒤 다시", "보고 다시",
+    ]
+    for kw in forbidden_extra_action_keywords:
+        if kw in trimmed:
+            return False, f"추가 또는 조건부 조작 유도 키워드('{kw}') 포함"
+
+    if not is_recovery:
+        forbidden_initial_keywords = ["다시", "재차", "재시도"]
+        for kw in forbidden_initial_keywords:
+            if kw in trimmed:
+                return False, f"초기 조작 안내에 부적절한 재시도 키워드('{kw}') 포함"
+    else:
+        if trimmed.count("다시") > 1:
+            return False, "재시도 키워드('다시') 중복 출현"
+
+    # 4. 횟수/스텝 검증 (P0: 1단 증가 = 1회 누름)
     multi_press_keywords = [
         "두 번", "세 번", "네 번", "다섯 번", "여섯 번", "일곱 번", "여덟 번", "아홉 번", "열 번",
         "2번", "3번", "4번", "5번", "6번", "7번", "8번", "9번", "10번",
@@ -82,6 +111,11 @@ def validate_instruction_against_goal(
     single_press_keywords = ["한 번", "한번", "1번", "1회"]
     if not any(kw in trimmed for kw in single_press_keywords):
         return False, "1회 누름 안내('한 번', '1회' 등) 누락"
+
+    # 5. 조작 동사 출현 횟수 검증 (누르/눌러/터치/클릭 등 조작 행위는 문장 전체에서 단 1회만 허용)
+    action_stems = re.findall(r"(?:눌러|누르|누른|누름|터치|클릭|탭)", trimmed)
+    if len(action_stems) > 1:
+        return False, f"복수 조작 동사 출현({len(action_stems)}회): 단일 조작만 허용됨"
 
     return True, "유효한 조작 안내"
 
@@ -134,6 +168,7 @@ class AgentOrchestrator:
         self.recovery = recovery_skill or default_recovery_skill
         self.tools = tool_registry or default_tool_registry
         self.usage = UsageSummary()
+        self.executed_tool_calls: list[dict[str, Any]] = []
 
     def interpret_goal(
         self,
@@ -184,6 +219,7 @@ class AgentOrchestrator:
 
         tool_schemas = self.tools.to_openai_tools() if self.tools else None
         executed_tool_calls: list[dict[str, Any]] = []
+        self.executed_tool_calls = []
 
         instruction = fallback_instruction
         plan_message = "목표 해석 및 기본 조작 안내 생성"
@@ -212,11 +248,13 @@ class AgentOrchestrator:
                             res = await self.tools.execute(tc.name, **tc.arguments)
                         else:
                             res = ToolResult(success=False, error="Tool registry가 없습니다.")
-                        executed_tool_calls.append({
+                        call_entry = {
                             "name": tc.name,
                             "arguments": tc.arguments,
                             "result": res.model_dump(),
-                        })
+                        }
+                        executed_tool_calls.append(call_entry)
+                        self.executed_tool_calls.append(call_entry)
                         messages.append({
                             "role": "tool",
                             "tool_call_id": tc.id,
@@ -235,10 +273,10 @@ class AgentOrchestrator:
                         plan_message = f"LLM 조작 안내 안전 검증 불일치({validation_msg}), 안전 기본 안내 적용"
                 break
         except FATAL_LLM_ERRORS:
-            # 치명적 모델 오류(인증/한도/타임아웃 등)는 fallback으로 감추지 않고 명시적으로 호출자에게 전파
+            # 치명적 모델 오류(인증/한도/타임아웃/응답형식 등)는 fallback으로 감추지 않고 명시적으로 호출자에게 전파
             raise
         except Exception as exc:
-            plan_message = f"LLM 호출 중단({type(exc).__name__}), 안전 기본 안내 적용"
+            raise LlmProviderError(f"LLM 계획 호출 중단({type(exc).__name__}): {exc}") from exc
 
         return goal, instruction, plan_message, executed_tool_calls
 
@@ -285,8 +323,8 @@ class AgentOrchestrator:
                     )
         except FATAL_LLM_ERRORS:
             raise
-        except Exception:
-            pass
+        except Exception as exc:
+            raise LlmProviderError(f"LLM 복구 호출 중단({type(exc).__name__}): {exc}") from exc
 
         return fallback_inst, "오조작 복구: 기본 재조작 안내 적용"
 

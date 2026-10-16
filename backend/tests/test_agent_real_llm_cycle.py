@@ -13,9 +13,9 @@ from app.llm.openai_provider import (
     LlmAuthenticationError,
     LlmProviderError,
     LlmRateLimitError,
+    LlmResponseFormatError,
     LlmTimeoutError,
     MissingApiKeyError,
-    OpenAiProvider,
 )
 from app.tools.base import BaseTool, ToolRegistry, ToolResult
 from app.tools.registry import create_mock_registry
@@ -190,20 +190,36 @@ def test_instruction_validation_against_goal_mismatches():
         assert inst3.text == fallback_expected
         assert "안전 검증 불일치" in plan_msg3
 
-        # 4. 올바른 응답은 정상 수락
+        # 4. 한 문장 안의 복수 조작 (누르고 한 번 더)
         mock_llm4 = MockLlmProvider()
-        valid_text = "안전을 위해 오른쪽 화구의 + 버튼을 한 번 눌러 주세요."
-        mock_llm4.queue_text(valid_text)
+        mock_llm4.queue_text("오른쪽 화구의 + 버튼을 한 번 누르고 한 번 더 눌러 주세요.")
         orch4 = AgentOrchestrator(llm_provider=mock_llm4)
         _, inst4, plan_msg4, _ = await orch4.plan_and_instruct("오른쪽 화력 1단 올려줘", zone_id="right")
-        assert inst4.text == valid_text
-        assert "LLM 목표 분석 및 조작 안내 수립 완료" in plan_msg4
+        assert inst4.text == fallback_expected
+        assert "안전 검증 불일치" in plan_msg4
+
+        # 5. 조건부 추가 조작 (누른 뒤 변화가 없으면 다시)
+        mock_llm5 = MockLlmProvider()
+        mock_llm5.queue_text("오른쪽 화구의 + 버튼을 한 번 누른 뒤 변화가 없으면 다시 눌러 주세요.")
+        orch5 = AgentOrchestrator(llm_provider=mock_llm5)
+        _, inst5, plan_msg5, _ = await orch5.plan_and_instruct("오른쪽 화력 1단 올려줘", zone_id="right")
+        assert inst5.text == fallback_expected
+        assert "안전 검증 불일치" in plan_msg5
+
+        # 6. 올바른 응답은 정상 수락
+        mock_llm6 = MockLlmProvider()
+        valid_text = "안전을 위해 오른쪽 화구의 + 버튼을 한 번 눌러 주세요."
+        mock_llm6.queue_text(valid_text)
+        orch6 = AgentOrchestrator(llm_provider=mock_llm6)
+        _, inst6, plan_msg6, _ = await orch6.plan_and_instruct("오른쪽 화력 1단 올려줘", zone_id="right")
+        assert inst6.text == valid_text
+        assert "LLM 목표 분석 및 조작 안내 수립 완료" in plan_msg6
 
     asyncio.run(_run())
 
 
 def test_replan_recovery_validation_against_goal_mismatches():
-    """[P1 회귀] 오조작 복구 시에도 잘못된 화구·방향·횟수 응답은 안전 기본 재조작 안내로 대체되어야 함."""
+    """[P1 회귀] 오조작 복구 시에도 잘못된 화구·방향·횟수 및 복수/조건부 조작 응답은 안전 기본 재조작 안내로 대체되어야 함."""
     async def _run():
         goal = Goal(zone_id="right", direction="increase", requested_steps=1)
         fallback_inst = Instruction(action_id="act-rec-val", text="오른쪽 화구의 + 버튼을 한 번 눌러 주세요.")
@@ -222,20 +238,36 @@ def test_replan_recovery_validation_against_goal_mismatches():
         assert inst1.text == fallback_inst.text
         assert "안전 검증 불일치" in msg1
 
-        # 2. 올바른 복구 안내는 정상 수락
+        # 2. 복구 안내 내 복수 조작 (누르고 한 번 더)
         mock_llm2 = MockLlmProvider()
-        valid_rec_text = "오른쪽 화구의 + 버튼을 다시 한 번 꼭 눌러 주세요."
-        mock_llm2.queue_text(valid_rec_text)
+        mock_llm2.queue_text("오른쪽 화구의 + 버튼을 한 번 누르고 한 번 더 눌러 주세요.")
         orch2 = AgentOrchestrator(llm_provider=mock_llm2)
         inst2, msg2 = await orch2.replan_recovery_with_llm(goal, rec_result)
-        assert inst2.text == valid_rec_text
-        assert "LLM 재조작 안내 수립 완료" in msg2
+        assert inst2.text == fallback_inst.text
+        assert "안전 검증 불일치" in msg2
+
+        # 3. 복구 안내 내 조건부 추가 조작 (누른 뒤 변화가 없으면 다시)
+        mock_llm3 = MockLlmProvider()
+        mock_llm3.queue_text("오른쪽 화구의 + 버튼을 한 번 누른 뒤 변화가 없으면 다시 눌러 주세요.")
+        orch3 = AgentOrchestrator(llm_provider=mock_llm3)
+        inst3, msg3 = await orch3.replan_recovery_with_llm(goal, rec_result)
+        assert inst3.text == fallback_inst.text
+        assert "안전 검증 불일치" in msg3
+
+        # 4. 올바른 복구 안내는 정상 수락
+        mock_llm4 = MockLlmProvider()
+        valid_rec_text = "오른쪽 화구의 + 버튼을 다시 한 번 꼭 눌러 주세요."
+        mock_llm4.queue_text(valid_rec_text)
+        orch4 = AgentOrchestrator(llm_provider=mock_llm4)
+        inst4, msg4 = await orch4.replan_recovery_with_llm(goal, rec_result)
+        assert inst4.text == valid_rec_text
+        assert "LLM 재조작 안내 수립 완료" in msg4
 
     asyncio.run(_run())
 
 
 def test_orchestrator_raises_fatal_llm_errors():
-    """[P1 회귀] 치명적 모델 오류(인증/한도/타임아웃)는 기본 안내로 대체되지 않고 호출자에게 전파되어야 함."""
+    """[P1 회귀] 치명적 모델 오류(인증/한도/타임아웃/응답형식)는 기본 안내로 대체되지 않고 호출자에게 전파되어야 함."""
     class FailingProvider:
         def __init__(self, exc: Exception):
             self.exc = exc
@@ -249,6 +281,7 @@ def test_orchestrator_raises_fatal_llm_errors():
             LlmTimeoutError("Timeout 30s"),
             MissingApiKeyError("Missing Key"),
             LlmProviderError("Provider Error"),
+            LlmResponseFormatError("Invalid JSON/Schema"),
             TimeoutError("asyncio timeout"),
         ]
 

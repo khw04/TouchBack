@@ -505,5 +505,149 @@ def test_create_run_tools_connected_to_mock_adapter_and_sensor_error():
             events2 = details2["events"]
             assert any(e["kind"] == "tool_call" and "실행 실패" in e["message"] for e in events2)
             assert any(e["kind"] == "error" and "센서 사전 점검에서 이상" in e["message"] for e in events2)
+            # 센서 사전 점검 실패로 uncertain 종료되어도 이미 소비된 토큰 메트릭이 보존되어야 함
+            assert any(e["kind"] == "plan" and "LLM 계획 토큰 메트릭" in e["message"] and "tokens:" in e["message"] for e in events2)
             # 활성 실행 락도 해제되어야 함
             assert run_store._active_run_id is None
+
+
+def test_real_llm_response_schema_or_json_error_terminates_failed():
+    """[P2 회귀] real_llm 모드에서 모델이 잘못된 JSON이나 빈 choices를 반환하면 fallback 없이 failed로 안전 종료되어야 함."""
+    settings.execution_mode = "real_llm"
+    settings.openai_api_key = "sk-valid-format-key-for-test"
+
+    malformed_responses = [
+        ("invalid_json", "not a valid json response {"),
+        ("empty_choices", '{"choices": []}'),
+    ]
+
+    for label, raw_text in malformed_responses:
+        run_store.reset()
+
+        mock_resp = httpx.Response(
+            status_code=200,
+            request=httpx.Request("POST", "https://api.openai.com/v1/chat/completions"),
+            text=raw_text,
+        )
+
+        with patch("httpx.AsyncClient.post", return_value=mock_resp):
+            res = client.post(
+                "/api/runs",
+                json={"user_input": "오른쪽 화력 1단 올려줘", "source": "mock", "zone_id": "right"},
+            )
+            assert res.status_code == 201
+            run_data = res.json()
+            run_id = run_data["run_id"]
+
+            # 모델 응답 파싱/스키마 실패 시 awaiting_user로 넘어가지 않고 failed로 종료
+            assert run_data["status"] == "failed"
+            assert run_data["execution_mode"] == "real_llm"
+
+            details = client.get(f"/api/runs/{run_id}").json()
+            assert details["status"] == "failed"
+            assert details["instruction"] is None
+            assert any(e["kind"] == "error" and ("LlmResponseFormatError" in e["message"] or "파싱 실패" in e["message"] or "choices" in e["message"]) for e in details["events"])
+
+
+def test_first_call_success_second_call_fatal_error_preserves_usage_and_tools():
+    """[P2 회귀] 첫 번째 호출에서 도구 실행과 50토큰이 소비된 뒤 두 번째 호출에서 LlmRateLimitError가 발생해도 사용량과 도구 기록이 보존되어야 함."""
+    run_store.reset()
+    settings.execution_mode = "mock_llm"
+
+    from app.llm.openai_provider import LlmRateLimitError
+
+    class TwoTurnFailingProvider(MockLlmProvider):
+        def __init__(self):
+            super().__init__()
+            self.turn = 0
+
+        async def generate(self, messages, tools=None):
+            self.turn += 1
+            if self.turn == 1:
+                return LlmResponse(
+                    text=None,
+                    tool_calls=[ToolCall(id="tc-1", name="check_sensor_integrity", arguments={})],
+                    usage=LlmUsage(prompt_tokens=35, completion_tokens=15, total_tokens=50),
+                    model="mock-two-turn",
+                )
+            raise LlmRateLimitError("429 Too Many Requests")
+
+    failing_provider = TwoTurnFailingProvider()
+
+    with patch("app.api.runs.get_llm_provider", return_value=failing_provider):
+        res = client.post(
+            "/api/runs",
+            json={"user_input": "오른쪽 화력 1단 올려줘", "source": "mock", "zone_id": "right"},
+        )
+        assert res.status_code == 201
+        run_data = res.json()
+        assert run_data["status"] == "failed"
+
+        details = client.get(f"/api/runs/{run_data['run_id']}").json()
+        assert details["status"] == "failed"
+        assert details["instruction"] is None
+        events = details["events"]
+
+        # 첫 번째 턴에서 성공한 도구 실행 내역이 보존되어야 함
+        assert any(e["kind"] == "tool_call" and "도구 'check_sensor_integrity' 실행 완료" in e["message"] for e in events)
+
+        # 첫 번째 턴에서 소비된 50토큰 메트릭이 보존되어야 함
+        assert any(e["kind"] == "plan" and "LLM 계획 토큰 메트릭" in e["message"] and "tokens: 50" in e["message"] for e in events)
+
+        # 두 번째 턴의 실패 원인이 error 이벤트로 기록되어야 함
+        assert any(e["kind"] == "error" and "LlmRateLimitError" in e["message"] for e in events)
+
+
+def test_recovery_event_and_speech_items_carry_verified_instruction():
+    """[P2 회귀] 오조작 복구 응답에서 recovery 및 instruction 이벤트에 사용자가 음성으로 안내받을 실제 조작 문장이 전달되어야 함."""
+    run_store.reset()
+    settings.execution_mode = "mock_llm"
+
+    from tests.test_misoperation_recovery import build_multi_step_mock_adapter
+
+    adapter_nc = build_multi_step_mock_adapter(second_step_success=True)
+
+    mock_llm = MockLlmProvider()
+    # 1차 계획 생성 응답
+    mock_llm.queue_text("오른쪽 화구의 + 버튼을 한 번 눌러 주세요.")
+    # 복구 재계획 응답
+    mock_llm.queue_text("출력 변화가 없습니다. 오른쪽 화구의 + 버튼을 다시 한 번 꼭 눌러 주세요.")
+
+    with patch("app.api.runs.resolve_adapter_for_run", return_value=adapter_nc):
+        with patch("app.api.runs.get_llm_provider", return_value=mock_llm):
+            # 1. 초기 실행 생성
+            c_res = client.post(
+                "/api/runs",
+                json={"user_input": "오른쪽 화력 1단 올려줘", "source": "mock", "zone_id": "right"},
+            )
+            assert c_res.status_code == 201
+            run_id = c_res.json()["run_id"]
+
+            details1 = client.get(f"/api/runs/{run_id}").json()
+            act1 = details1["instruction"]["action_id"]
+
+            # 2. 사용자 조작 인지 (ack)
+            client.post(f"/api/runs/{run_id}/ack", json={"action_id": act1})
+
+            # 3. 관측 수행 -> no_change로 인한 mismatch -> 1회 복구 트리거
+            step_res = client.post(f"/api/runs/{run_id}/step", json={"action_id": act1})
+            assert step_res.status_code == 200
+            step_data = step_res.json()
+
+            # 복구 후 새로운 action_id 발급 및 awaiting_user 전이
+            assert step_data["status"] == "awaiting_user"
+            act2 = step_data["instruction"]["action_id"]
+            assert act2 != act1
+            assert "다시 한 번 꼭" in step_data["instruction"]["text"]
+
+            events = step_data["events"]
+
+            # recovery 이벤트의 message는 'LLM 재조작 안내 수립 완료'가 아니라 실제 사용자 조작 안내 문장이어야 함
+            recovery_events = [e for e in events if e["kind"] == "recovery" and e.get("action_id") == act2]
+            assert len(recovery_events) == 1
+            assert recovery_events[0]["message"] == step_data["instruction"]["text"]
+            assert "오른쪽 화구의 + 버튼을 다시 한 번 꼭 눌러 주세요." in recovery_events[0]["message"]
+
+            # 내부 계획 완료 설명은 plan 이벤트로 안전하게 분리되어야 함
+            plan_events = [e for e in events if e["kind"] == "plan" and e.get("action_id") == act2]
+            assert any("LLM 재조작 안내 수립 완료" in e["message"] for e in plan_events)

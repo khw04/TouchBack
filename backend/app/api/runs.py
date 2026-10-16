@@ -332,17 +332,22 @@ class RunStore:
 
         if exec_mode in ("mock_llm", "real_llm"):
             provider = get_llm_provider(mode=exec_mode)
-            tool_registry = create_registry_from_adapter(adapter, source=req.source)
+            tool_registry = create_registry_from_adapter(
+                adapter, source=req.source, run_id=run_id, zone_id=goal.zone_id, for_planning=True
+            )
             orch = AgentOrchestrator(llm_provider=provider, adapter=adapter, tool_registry=tool_registry)
             try:
                 _, instruction, plan_detail_msg, executed_tool_calls = run_sync(
                     orch.plan_and_instruct(req.user_input, goal.zone_id, action_id),
                     timeout=10.0,
                 )
-                if orch.usage.call_count > 0:
-                    usage_msg = orch.usage.to_event_message()
             except Exception as exc:
                 planning_error = exc
+            finally:
+                if not executed_tool_calls and getattr(orch, "executed_tool_calls", None):
+                    executed_tool_calls = list(orch.executed_tool_calls)
+                if orch.usage.call_count > 0:
+                    usage_msg = orch.usage.to_event_message()
         else:
             zone_label = "오른쪽" if goal.zone_id == "right" else "왼쪽"
             instruction = Instruction(
@@ -372,27 +377,7 @@ class RunStore:
                     execution_mode=current_state.execution_mode,
                 )
 
-            # 1. 처리 불가능한 치명적 모델 오류(인증/한도/타임아웃 등) 발생 시 명시적 실패(failed) 종료
-            if planning_error is not None:
-                current_state.status = "failed"
-                current_state.instruction = None
-                current_state.current_action_id = None
-                current_state.status_updated_at = now_after_plan
-                current_state.generation += 1
-                self._add_event(
-                    current_state,
-                    kind="error",
-                    message=f"LLM 계획 수립 실패: {planning_error}",
-                )
-                if self._active_run_id == run_id:
-                    self._active_run_id = None
-                return CreateRunResponse(
-                    run_id=current_state.run_id,
-                    status=current_state.status,
-                    execution_mode=current_state.execution_mode,
-                )
-
-            # 2. 사전 점검 도구 실행 결과 기록 및 센서 결함 여부 확인
+            # 1. 사전 점검 도구 실행 결과 기록 및 센서 결함 여부 확인 (실패/센서이상/정상 모두 공통 보존)
             sensor_fault_detected = False
             sensor_fault_reason = ""
             for tc in executed_tool_calls:
@@ -418,6 +403,37 @@ class RunStore:
                         sensor_fault_detected = True
                         sensor_fault_reason = err_text
 
+            # 2. 모델 토큰 사용량 기록 (실패/센서이상/정상 모두 공통 보존)
+            if usage_msg:
+                self._add_event(
+                    current_state,
+                    kind="plan",
+                    message=f"LLM 계획 토큰 메트릭: {usage_msg}",
+                    action_id=action_id,
+                )
+
+            # 3. 처리 불가능한 치명적 모델 오류(인증/한도/타임아웃/응답형식 등) 발생 시 명시적 실패(failed) 종료
+            if planning_error is not None:
+                current_state.status = "failed"
+                current_state.instruction = None
+                current_state.current_action_id = None
+                current_state.status_updated_at = now_after_plan
+                current_state.generation += 1
+                self._add_event(
+                    current_state,
+                    kind="error",
+                    message=f"LLM 계획 수립 실패({type(planning_error).__name__}): {planning_error}",
+                    action_id=action_id,
+                )
+                if self._active_run_id == run_id:
+                    self._active_run_id = None
+                return CreateRunResponse(
+                    run_id=current_state.run_id,
+                    status=current_state.status,
+                    execution_mode=current_state.execution_mode,
+                )
+
+            # 4. 사전 점검 센서 결함 감지 시 명시적 uncertain 종료
             if sensor_fault_detected:
                 current_state.status = "uncertain"
                 current_state.verdict = Verdict(
@@ -445,7 +461,7 @@ class RunStore:
                     execution_mode=current_state.execution_mode,
                 )
 
-            # 3. 정상: 안내 게시 및 사용자 조작 대기(awaiting_user) 전이
+            # 5. 정상: 안내 게시 및 사용자 조작 대기(awaiting_user) 전이
             current_state.status = "awaiting_user"
             current_state.instruction = instruction
             current_state.current_action_id = action_id
@@ -458,13 +474,6 @@ class RunStore:
                     current_state,
                     kind="plan",
                     message=plan_detail_msg,
-                    action_id=action_id,
-                )
-            if usage_msg:
-                self._add_event(
-                    current_state,
-                    kind="plan",
-                    message=f"LLM 계획 토큰 메트릭: {usage_msg}",
                     action_id=action_id,
                 )
             if instruction:
@@ -658,13 +667,15 @@ class RunStore:
                 )
                 if recovery.decision.value == "retry_instruction":
                     try:
-                        inst, msg = await orch.replan_recovery_with_llm(goal, recovery)
+                        inst, plan_msg = await orch.replan_recovery_with_llm(goal, recovery)
                         recovery.instruction = inst
-                        recovery.message = msg
+                        recovery.message = inst.text if inst else ""
+                        recovery.plan_message = plan_msg
                     except FATAL_LLM_ERRORS as exc:
                         recovery.decision = RecoveryDecisionType.ABORT_UNCERTAIN
                         recovery.message = f"LLM 복구 안내 수립 중 오류({type(exc).__name__})로 추가 조작 중단"
                         recovery.instruction = None
+                        recovery.plan_message = recovery.message
             return verdict, feedback, recovery
 
         try:
@@ -742,11 +753,18 @@ class RunStore:
                         message="관측 처리 종료. 판정 수준과 근거를 확인해 주세요.",
                         evidence_ids=verdict.evidence_ids,
                     )
+                    plan_detail = getattr(rec_res, "plan_message", None) or "오조작 복구: 재조작 안내 수립"
+                    self._add_event(
+                        current_state,
+                        kind="plan",
+                        action_id=rec_res.instruction.action_id,
+                        message=plan_detail,
+                    )
                     self._add_event(
                         current_state,
                         kind="recovery",
                         action_id=rec_res.instruction.action_id,
-                        message=rec_res.message,
+                        message=rec_res.instruction.text,
                         evidence_ids=verdict.evidence_ids,
                     )
                     if hasattr(orch, "usage") and orch.usage.call_count > 0:
