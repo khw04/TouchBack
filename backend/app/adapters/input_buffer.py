@@ -70,6 +70,8 @@ class InputBuffer:
             return
         if self._last_seq >= 0 and device.seq != self._last_seq + 1:
             self._offsets.clear()
+            if self._on_error is not None:
+                self._on_error("sequence_gap")
         self._last_seq = device.seq
         self._offsets.append(now_ms - device.window_end_ms)
         # Offset includes unknown transport delay. Never grant live verified status.

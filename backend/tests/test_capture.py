@@ -143,3 +143,9 @@ def test_recording_callback_io_error_is_not_mislabelled_as_serial_disconnect():
         assert "disconnected" not in errors
     finally:
         adapter.close()
+
+def test_skipped_sequence_is_visible_in_capture_summary(tmp_path):
+    data=b"".join((x.model_dump_json()+"\n").encode() for x in [frame(0),frame(2)])
+    _, summary=run_capture(tmp_path,[data])
+    assert summary["observations"] == 2
+    assert summary["errors"] == {"sequence_gap":1}
