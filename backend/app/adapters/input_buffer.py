@@ -6,9 +6,10 @@ from app.contracts.models import DeviceObservation, Observation, Quality
 
 
 class InputBuffer:
-    def __init__(self, source: str, expected_device_id: str | None = None):
+    def __init__(self, source: str, expected_device_id: str | None = None, *, on_error=None):
         if source not in ("live", "replay"):
             raise ValueError("source must be live or replay")
+        self._on_error = on_error
         self.source = source
         self.device_id = expected_device_id
         self.session_id: str | None = None
@@ -27,6 +28,8 @@ class InputBuffer:
         self._records.clear()
         self._offsets.clear()
         self._returned.clear()
+        if self._on_error is not None:
+            self._on_error(reason)
 
     def reset(self) -> None:
         """Explicit reconnect/resynchronization; discard previous baseline/mapping."""
@@ -37,7 +40,7 @@ class InputBuffer:
         self._last_seq = -1
         self._seen.clear()
 
-    def ingest(self, device: DeviceObservation, now_ms: int, utc: datetime) -> None:
+    def ingest(self, device: DeviceObservation, now_ms: int, utc: datetime) -> Observation | None:
         device = DeviceObservation.model_validate_json(device.model_dump_json())
         if self.source == "live" and device.source != "live":
             self.invalidate("source_mismatch")
@@ -79,13 +82,15 @@ class InputBuffer:
         if len(self._records) == 256:
             self._returned.discard(self._records[0].observation_id)
         device.source = self.source
-        self._records.append(Observation(
+        record = Observation(
             schema_version="0.2", observation_id=identifier, run_id=None, action_id=None,
             received_at=utc, received_monotonic_ms=now_ms,
             mapped_window_start_ms=None if offset is None else device.window_start_ms+offset,
             mapped_window_end_ms=None if offset is None else device.window_end_ms+offset,
             clock_quality="unverified", device_observation=device,
-        ))
+        )
+        self._records.append(record)
+        return self._copy(record)
 
     def _copy(self, observation: Observation) -> Observation:
         result = observation.model_copy(deep=True)
