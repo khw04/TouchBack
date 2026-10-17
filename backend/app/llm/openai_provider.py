@@ -118,43 +118,38 @@ class OpenAiProvider(BaseLlmProvider):
                 f"OpenAI API 응답이 올바른 JSON 객체가 아닙니다: {type(data).__name__}"
             )
 
+        # Capture valid billing facts before validating choices/message.
+        usage = None
+        raw_usage = data.get("usage")
+        if isinstance(raw_usage, dict):
+            details = raw_usage.get("completion_tokens_details") or {}
+            if isinstance(details, dict):
+                values = {
+                    "prompt_tokens": raw_usage.get("prompt_tokens", 0),
+                    "completion_tokens": raw_usage.get("completion_tokens", 0),
+                    "reasoning_tokens": details.get("reasoning_tokens", 0),
+                }
+                values["total_tokens"] = raw_usage.get("total_tokens", values["prompt_tokens"] + values["completion_tokens"]) if all(type(v) is int for v in values.values()) else None
+                if all(type(v) is int and v >= 0 for v in values.values()):
+                    usage = LlmUsage(**values)
+
+        def invalid_response(reason: str) -> LlmResponseFormatError:
+            model = data.get("model")
+            if not isinstance(model, str):
+                model = self.settings.openai_model
+            return LlmResponseFormatError(reason, usage=usage, model=model)
+
         choices = data.get("choices")
         if not choices or not isinstance(choices, list) or len(choices) == 0:
-            raise LlmResponseFormatError(
-                "OpenAI API 응답에 choices 항목이 없거나 비어 있습니다."
-            )
+            raise invalid_response("OpenAI API 응답에 choices 항목이 없거나 비어 있습니다.")
 
         choice = choices[0]
         if not isinstance(choice, dict):
-            raise LlmResponseFormatError(
-                f"OpenAI API 응답 choice 항목이 올바른 객체가 아닙니다: {type(choice).__name__}"
-            )
+            raise invalid_response("OpenAI API 응답 choice 항목이 올바른 객체가 아닙니다.")
 
         message = choice.get("message")
         if not isinstance(message, dict):
-            raise LlmResponseFormatError(
-                f"OpenAI API 응답 message 항목이 올바른 객체가 아닙니다: {type(message).__name__}"
-            )
-
-        # Parse token usage
-        usage_data = data.get("usage", {})
-        prompt_tokens = usage_data.get("prompt_tokens", 0)
-        completion_tokens = usage_data.get("completion_tokens", 0)
-        total_tokens = usage_data.get("total_tokens", prompt_tokens + completion_tokens)
-        reasoning_tokens = (
-            usage_data.get("completion_tokens_details", {}).get("reasoning_tokens", 0)
-        )
-
-        usage = LlmUsage(
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            reasoning_tokens=reasoning_tokens,
-            total_tokens=total_tokens,
-        )
-
-        def invalid_response(reason: str) -> LlmResponseFormatError:
-            # A rejected response can still consume tokens; preserve billing evidence.
-            return LlmResponseFormatError(reason, usage=usage, model=data.get("model", self.settings.openai_model))
+            raise invalid_response("OpenAI API 응답 message 항목이 올바른 객체가 아닙니다.")
 
         if message.get("refusal") is not None:
             raise invalid_response("모델이 요청을 거절했습니다. 조작 안내를 중단합니다.")
@@ -196,6 +191,6 @@ class OpenAiProvider(BaseLlmProvider):
         return LlmResponse(
             text=content,
             tool_calls=tool_calls,
-            usage=usage,
+            usage=usage or LlmUsage(),
             model=data.get("model", self.settings.openai_model),
         )
