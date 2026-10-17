@@ -363,3 +363,39 @@ test("fixture cancellation preserves its completed verdict and repeated cancella
   assert.equal(stopped.status, "stopped");
   assert.deepEqual(await fixture.cancel(active.run_id), stopped);
 });
+
+test("operator demo configuration carries no scenario label in the Agent start request", async () => {
+  const metadata = { enabled: true, source: "mock", execution_mode: "mock_llm", scenario: "recovery",
+    scenarios: ["normal", "recovery"], physical_validation_performed: false };
+  const calls=[];
+  const api=createApi("",async (url,options) => {
+    calls.push([url,options]);
+    return {ok:true,json:async()=>url==="/api/runs"?{run_id:"r1",status:"planning",execution_mode:"mock_llm"}:metadata};
+  });
+  assert.deepEqual(await api.demoInfo(),metadata);
+  assert.deepEqual(await api.configureDemo("recovery"),metadata);
+  await api.start("화력 올려줘","mock","right");
+  assert.deepEqual(JSON.parse(calls[1][1].body),{scenario:"recovery"});
+  assert.deepEqual(JSON.parse(calls[2][1].body),{user_input:"화력 올려줘",source:"mock",zone_id:"right"});
+});
+
+test("operator controls reject malformed or non-Mock metadata", async () => {
+  const valid={enabled:true,source:"mock",execution_mode:"mock_llm",scenario:"normal",scenarios:["normal"],physical_validation_performed:false};
+  const {validateDemoMetadata}=await import("../../frontend/api.mjs");
+  assert.deepEqual(validateDemoMetadata({enabled:false}),{enabled:false});
+  for(const bad of [null,{}, {...valid,source:"live"},{...valid,execution_mode:"backend_stub"},
+    {...valid,scenario:"unknown"},{...valid,scenarios:["normal","normal"]},{...valid,physical_validation_performed:true}]) {
+    assert.throws(()=>validateDemoMetadata(bad),error=>error.code==="invalid_response");
+  }
+});
+
+test("demo settings cannot change during planning, observation or uncertain start", async () => {
+  const {demoControlsDisabled,demoLabel}=await import("../../frontend/demo.mjs");
+  for(const status of ["planning","awaiting_clarification","awaiting_user","observing","recovering"])
+    assert.equal(demoControlsDisabled({run:{status}}),true);
+  for(const status of ["succeeded","uncertain","stopped","failed"])
+    assert.equal(demoControlsDisabled({run:{status}}),false);
+  assert.equal(demoControlsDisabled({busy:true}),true);
+  assert.equal(demoControlsDisabled({startUnknown:true}),true);
+  assert.equal(demoLabel("recovery"),"미인식 후 한 번 복구");
+});
