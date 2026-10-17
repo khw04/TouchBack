@@ -10,10 +10,22 @@
 <main>
   <header>
     <p class="eyebrow">TOUCHBACK · 실행 화면</p>
-    <h1>조작한 뒤, 실제 결과를 확인하세요</h1>
-    <p>사용자가 직접 인덕션을 조작합니다. 화면은 서버가 보고한 안내와 관측 결과를 보여줍니다.</p>
+    <h1 id="page-title">조작한 뒤, 실제 결과를 확인하세요</h1>
+    <p id="page-description">사용자가 직접 인덕션을 조작합니다. 화면은 서버가 보고한 안내와 관측 결과를 보여줍니다.</p>
     <button id="large-text" type="button" class="secondary" aria-pressed="false">큰 글씨 켜기</button>
   </header>
+  <section id="demo-controls" class="card" aria-labelledby="demo-title" hidden>
+    <h2 id="demo-title">모의 관측 시연 설정</h2>
+    <p id="demo-mode"></p>
+    <p>실물 인덕션을 조작하지 마세요. 안내와 완료 알림은 합성 관측으로 Agent 판단·복구를 확인하는 단계입니다.</p>
+    <label for="demo-scenario">모의 입력</label>
+    <select id="demo-scenario"></select>
+    <div class="actions">
+      <button id="demo-apply" type="button">모의 입력 적용</button>
+      <button id="demo-reload" type="button" class="secondary">시연 설정 다시 확인</button>
+    </div>
+    <p id="demo-status" role="status" aria-live="polite"></p>
+  </section>
   <section class="card" aria-labelledby="input-title">
     <h2 id="input-title">1. 목표 입력</h2>
     <form id="goal-form">
@@ -60,7 +72,7 @@
     <div class="actions"><button id="ack" disabled>조작 완료 알림</button><button id="cancel" class="secondary" disabled>실행 취소</button><button id="retry" class="secondary" disabled>상태 다시 확인</button><button id="repeat" class="secondary" disabled>안내 다시 듣기</button></div>
     <p id="speech-support" class="hint" role="status"></p>
     <label class="toggle"><input id="auto-speech" type="checkbox" checked> 새 안내 자동 읽기</label>
-    <p class="hint">조작 완료 알림은 성공 판정이 아닙니다. 센서 관측과 서버 판정을 기다리세요.</p>
+    <p id="observation-hint" class="hint">조작 완료 알림은 성공 판정이 아닙니다. 센서 관측과 서버 판정을 기다리세요.</p>
   </section>
   <section class="card" aria-labelledby="result-title">
     <h2 id="result-title">3. 판정과 근거</h2>
@@ -73,6 +85,6 @@
     <ol id="events" aria-label="실행 기록"><li>아직 기록이 없습니다.</li></ol>
   </section>
 </main>
-<script type="module" src="./app.mjs?v=15"></script>
+<script type="module" src="./app.mjs?v=16"></script>
 </body>
 </html>
