@@ -149,3 +149,45 @@ def test_skipped_sequence_is_visible_in_capture_summary(tmp_path):
     _, summary=run_capture(tmp_path,[data])
     assert summary["observations"] == 2
     assert summary["errors"] == {"sequence_gap":1}
+
+def test_close_finally_releases_transport_when_partial_error_recording_fails():
+    transport=Transport([b"partial"])
+    def error(reason):
+        if reason == "incomplete_line":
+            raise OSError("synthetic diagnostic write failure")
+    adapter=SerialAdapter(transport,on_error=error)
+    adapter.poll()
+    with pytest.raises(OSError,match="diagnostic write failure"):
+        adapter.close()
+    assert transport.closed and adapter.closed
+    adapter.close()  # Repeated close remains harmless.
+
+
+def test_capture_summary_failed_but_port_closed_when_shutdown_event_write_fails(tmp_path,monkeypatch):
+    original=Path.open
+    transports=[]
+    class EventWriter:
+        failed=False
+        def __init__(self,stream):self.stream=stream
+        def __enter__(self):return self
+        def __exit__(self,*args):return self.stream.__exit__(*args)
+        def write(self,text):
+            if 'incomplete_line' in text and not self.failed:
+                self.failed=True
+                raise OSError("synthetic shutdown write failure")
+            return self.stream.write(text)
+        def flush(self):self.stream.flush()
+    def opened(path,*args,**kwargs):
+        stream=original(path,*args,**kwargs)
+        return EventWriter(stream) if path.name == "events.jsonl" and args and args[0] == "x" else stream
+    monkeypatch.setattr(Path,"open",opened)
+    def factory(port,**options):
+        transport=Transport([(frame().model_dump_json()+"\npartial").encode()])
+        transports.append(transport)
+        return SerialAdapter(transport,**{k:v for k,v in options.items() if k!='baudrate'})
+    tick=[0.0]
+    def clock():tick[0]+=.001;return tick[0]
+    result=capture("TEST",tmp_path/"capture",duration_seconds=.02,adapter_factory=factory,monotonic=clock)
+    assert result["status"] == "failed" and result["observations"] == 1
+    assert result["errors"]["close_failed"] == 1
+    assert transports[0].closed

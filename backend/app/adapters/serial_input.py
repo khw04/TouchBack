@@ -123,9 +123,13 @@ class SerialAdapter:
     def close(self) -> None:
         if not self._closed:
             self._closed = True
-            self._decoder.finish()
-            self._transport.close()
-            self.buffer.invalidate("disconnected")
+            try:
+                self._decoder.finish()
+            finally:
+                try:
+                    self._transport.close()
+                finally:
+                    self.buffer.invalidate("disconnected")
 
     def __enter__(self):
         return self
