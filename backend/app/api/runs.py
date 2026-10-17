@@ -9,7 +9,7 @@ from typing import Any, Callable, Coroutine, Literal
 from fastapi import APIRouter, status
 from pydantic import BaseModel, ConfigDict
 
-from app.adapters.mock_setup import build_mock_adapter
+from app.adapters.demo_setup import build_demo_adapter
 from app.agent.orchestrator import FATAL_LLM_ERRORS, AgentOrchestrator
 from app.agent.recovery import RecoveryDecisionType
 from app.config import settings
@@ -61,7 +61,7 @@ def resolve_adapter_for_run(state: "RunState") -> Any | None:
             # Keep unconfigured adapter behavior for backend_stub to preserve contract regression
             return None
         zone = state.zone_id if state.zone_id in ("right", "left") else "right"
-        return build_mock_adapter("normal", zone_id=zone)
+        return build_demo_adapter(settings.mock_scenario, zone_id=zone)
     return None
 
 
@@ -195,6 +195,19 @@ class RunStore:
         self._add_event(state, "error", "관측 결과를 확인할 수 없습니다. 추가 조작을 멈추고 인덕션 상태를 직접 확인해 주세요.", state.last_acked_action_id)
         if self._active_run_id == state.run_id:
             self._active_run_id = None
+
+    def configure_mock_scenario(self, scenario: str) -> None:
+        from app.adapters.demo_setup import SCENARIOS
+        if scenario not in SCENARIOS:
+            raise RunApiException(422, "validation", "지원하지 않는 모의 입력입니다.")
+        with self._lock:
+            if self._active_run_id is not None:
+                state = self._runs.get(self._active_run_id)
+                if state:
+                    self._check_and_expire(state, self._now_utc())
+                    if state.status not in TERMINAL_STATUSES:
+                        raise RunApiException(409, "busy", "실행 중에는 모의 입력을 변경할 수 없습니다. 먼저 종료해 주세요.")
+            settings.mock_scenario = scenario
 
     def create_run(self, req: CreateRunRequest) -> CreateRunResponse:
         with self._lock:

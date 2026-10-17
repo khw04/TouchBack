@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from app.api.demo import router as demo_router
 from app.api.runs import RunApiException, router as runs_router
 from app.contracts.models import ErrorResponse
 
@@ -41,6 +42,7 @@ async def validation_exception_handler(_: Request, exc: RequestValidationError) 
 
 
 app.include_router(runs_router)
+app.include_router(demo_router)
 
 # Windows MIME registry may label .mjs as text/plain; browsers require JavaScript for modules.
 mimetypes.add_type("text/javascript", ".mjs")
