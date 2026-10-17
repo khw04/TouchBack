@@ -40,7 +40,10 @@ class LlmProviderError(Exception):
 class LlmResponseFormatError(LlmProviderError):
     """Raised when the LLM provider returns invalid JSON or an invalid response schema."""
 
-    pass
+    def __init__(self, message: str, *, usage: LlmUsage | None = None, model: str = ""):
+        super().__init__(message)
+        self.usage = usage
+        self.model = model
 
 
 class OpenAiProvider(BaseLlmProvider):
@@ -149,18 +152,39 @@ class OpenAiProvider(BaseLlmProvider):
             total_tokens=total_tokens,
         )
 
-        choice = data.get("choices", [{}])[0]
-        message = choice.get("message", {})
+        def invalid_response(reason: str) -> LlmResponseFormatError:
+            # A rejected response can still consume tokens; preserve billing evidence.
+            return LlmResponseFormatError(reason, usage=usage, model=data.get("model", self.settings.openai_model))
+
+        if message.get("refusal") is not None:
+            raise invalid_response("모델이 요청을 거절했습니다. 조작 안내를 중단합니다.")
+
         content = message.get("content")
+        if content is not None and not isinstance(content, str):
+            raise invalid_response("모델 응답 content 형식이 올바르지 않습니다.")
+        raw_tool_calls = message.get("tool_calls") or []
+        if not isinstance(raw_tool_calls, list):
+            raise invalid_response("모델 응답 tool_calls 형식이 올바르지 않습니다.")
+        finish_reason = choice.get("finish_reason")
+        if raw_tool_calls:
+            if finish_reason != "tool_calls" or not tools:
+                raise invalid_response("허용되지 않은 Tool 호출 또는 종료 사유입니다.")
+        elif finish_reason != "stop" or not content or not content.strip():
+            raise invalid_response("모델 안내가 비어 있거나 정상 완료되지 않았습니다.")
 
         tool_calls: list[ToolCall] = []
-        raw_tool_calls = message.get("tool_calls", [])
         for raw in raw_tool_calls:
+            if not isinstance(raw, dict) or raw.get("type") != "function":
+                raise invalid_response("모델 Tool 호출 형식이 올바르지 않습니다.")
             fn = raw.get("function", {})
+            if not isinstance(fn, dict) or not fn.get("name") or not raw.get("id"):
+                raise invalid_response("모델 Tool 호출에 이름 또는 ID가 없습니다.")
             try:
                 args = json.loads(fn.get("arguments", "{}"))
-            except Exception:
-                args = {}
+            except (ValueError, TypeError) as exc:
+                raise invalid_response("모델 Tool 인수가 올바른 JSON이 아닙니다.") from exc
+            if not isinstance(args, dict):
+                raise invalid_response("모델 Tool 인수는 JSON 객체여야 합니다.")
             tool_calls.append(
                 ToolCall(
                     id=raw.get("id", ""),

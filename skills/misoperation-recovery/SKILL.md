@@ -53,3 +53,7 @@
 - 복구 엔진: `backend/app/agent/recovery.py` (`MisoperationRecoverySkill`)
 - 오케스트레이터 연동: `backend/app/agent/orchestrator.py`
 - 상태 머신 연동: `backend/app/api/runs.py`
+
+## 5. API 안내 게시 안전 경계 (PR #16)
+
+복구 Skill이 RETRY_INSTRUCTION을 반환해도 API는 모델 복구 호출과 필수 센서 재점검이 통과한 경우에만 awaiting_user를 게시한다. 실제 조작 문장은 backend/app/agent/instructions.py의 지정 화구 + 버튼 1회 누름 템플릿을 사용하며 지속 누름·추가 조작을 허용하지 않는다. 모델 거절·빈 응답·처리 불가능한 모델 오류는 failed, 센서/기준선 점검 실패는 uncertain으로 종료하며 현재 안내를 제거한다. 모델 호출 중 악화된 센서 상태도 게시 직전 재점검한다. 관련 회귀 검사는 backend/tests/test_pr16_safety.py에 있다.

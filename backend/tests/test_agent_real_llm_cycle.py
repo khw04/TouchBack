@@ -128,7 +128,7 @@ def test_agent_orchestrator_replan_recovery_with_llm():
     """오조작 복구 시 LLM을 통한 재조작 안내 생성 및 토큰 집계 검증."""
     async def _run():
         mock_llm = MockLlmProvider()
-        mock_llm.queue_text("출력 변화가 없습니다. 오른쪽 화구의 + 버튼을 다시 한 번 꼭 눌러 주세요.")
+        mock_llm.queue_text("오른쪽 화구의 + 버튼을 다시 한 번 눌러 주세요.")
 
         orch = AgentOrchestrator(llm_provider=mock_llm)
         goal = Goal(zone_id="right", direction="increase", requested_steps=1)
@@ -143,7 +143,7 @@ def test_agent_orchestrator_replan_recovery_with_llm():
         inst, msg = await orch.replan_recovery_with_llm(goal, rec_result)
         assert inst is not None
         assert inst.action_id == "act-rec-01"
-        assert "다시 한 번 꼭" in inst.text
+        assert "다시 한 번" in inst.text
         assert "LLM 재조작 안내 수립 완료" in msg
         assert orch.usage.call_count == 1
         assert orch.usage.total_tokens > 0
@@ -208,7 +208,7 @@ def test_instruction_validation_against_goal_mismatches():
 
         # 6. 올바른 응답은 정상 수락
         mock_llm6 = MockLlmProvider()
-        valid_text = "안전을 위해 오른쪽 화구의 + 버튼을 한 번 눌러 주세요."
+        valid_text = "오른쪽 화구의 + 버튼을 한 번 눌러 주세요."
         mock_llm6.queue_text(valid_text)
         orch6 = AgentOrchestrator(llm_provider=mock_llm6)
         _, inst6, plan_msg6, _ = await orch6.plan_and_instruct("오른쪽 화력 1단 올려줘", zone_id="right")
@@ -235,7 +235,7 @@ def test_replan_recovery_validation_against_goal_mismatches():
         mock_llm1.queue_text("왼쪽 화구의 + 버튼을 세 번 다시 눌러 주세요.")
         orch1 = AgentOrchestrator(llm_provider=mock_llm1)
         inst1, msg1 = await orch1.replan_recovery_with_llm(goal, rec_result)
-        assert inst1.text == fallback_inst.text
+        assert inst1.text == "오른쪽 화구의 + 버튼을 다시 한 번 눌러 주세요."
         assert "안전 검증 불일치" in msg1
 
         # 2. 복구 안내 내 복수 조작 (누르고 한 번 더)
@@ -243,7 +243,7 @@ def test_replan_recovery_validation_against_goal_mismatches():
         mock_llm2.queue_text("오른쪽 화구의 + 버튼을 한 번 누르고 한 번 더 눌러 주세요.")
         orch2 = AgentOrchestrator(llm_provider=mock_llm2)
         inst2, msg2 = await orch2.replan_recovery_with_llm(goal, rec_result)
-        assert inst2.text == fallback_inst.text
+        assert inst2.text == "오른쪽 화구의 + 버튼을 다시 한 번 눌러 주세요."
         assert "안전 검증 불일치" in msg2
 
         # 3. 복구 안내 내 조건부 추가 조작 (누른 뒤 변화가 없으면 다시)
@@ -251,12 +251,12 @@ def test_replan_recovery_validation_against_goal_mismatches():
         mock_llm3.queue_text("오른쪽 화구의 + 버튼을 한 번 누른 뒤 변화가 없으면 다시 눌러 주세요.")
         orch3 = AgentOrchestrator(llm_provider=mock_llm3)
         inst3, msg3 = await orch3.replan_recovery_with_llm(goal, rec_result)
-        assert inst3.text == fallback_inst.text
+        assert inst3.text == "오른쪽 화구의 + 버튼을 다시 한 번 눌러 주세요."
         assert "안전 검증 불일치" in msg3
 
         # 4. 올바른 복구 안내는 정상 수락
         mock_llm4 = MockLlmProvider()
-        valid_rec_text = "오른쪽 화구의 + 버튼을 다시 한 번 꼭 눌러 주세요."
+        valid_rec_text = "오른쪽 화구의 + 버튼을 다시 한 번 눌러 주세요."
         mock_llm4.queue_text(valid_rec_text)
         orch4 = AgentOrchestrator(llm_provider=mock_llm4)
         inst4, msg4 = await orch4.replan_recovery_with_llm(goal, rec_result)

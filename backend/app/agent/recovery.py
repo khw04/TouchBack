@@ -2,6 +2,7 @@
 from enum import Enum
 import uuid
 
+from app.agent.instructions import instruction_text
 from app.contracts.models import Goal, Instruction, Observation, RunStatus, Verdict
 from app.verification.models import MockCalibration
 
@@ -237,10 +238,9 @@ class MisoperationRecoverySkill:
 
         # 6. 모든 조건 충족 시: 분리된 새 시간창 및 새 action_id로 1회 재조작 안내 발행
         new_action_id = f"act-retry-{uuid.uuid4().hex[:6]}"
-        zone_label = "오른쪽" if goal.zone_id == "right" else "왼쪽"
         instruction = Instruction(
             action_id=new_action_id,
-            text=f"화력 변화가 확인되지 않았습니다. {zone_label} 화구의 + 버튼을 다시 한 번 꾹 눌러 주세요.",
+            text=instruction_text(goal, is_recovery=True),
         )
         final_start = target_start_ms if target_start_ms is not None else 500
         final_end = next_window_end_ms if next_window_end_ms is not None else (final_start + 3000)

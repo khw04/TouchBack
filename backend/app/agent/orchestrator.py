@@ -2,11 +2,11 @@
 import asyncio
 from dataclasses import dataclass
 import json
-import re
 from typing import Any
 import uuid
 
 from app.contracts.goal_policy import interpret_p0_goal
+from app.agent.instructions import instruction_text
 from app.agent.prompts import SYSTEM_PROMPT, get_verdict_message
 from app.agent.recovery import MisoperationRecoverySkill, RecoveryDecisionType, RecoveryResult, default_recovery_skill
 from app.agent.verifier import IntentVerifier, default_verifier
@@ -52,71 +52,9 @@ def validate_instruction_against_goal(
     goal: Goal,
     is_recovery: bool = False,
 ) -> tuple[bool, str]:
-    """검증된 Goal(화구·방향·횟수)과 LLM 생성 조작 안내 문구를 엄격히 대조합니다."""
-    trimmed = text.strip()
-    if not (5 <= len(trimmed) <= 120):
-        return False, "문장 길이가 허용 범위(5~120자)를 벗어남"
-
-    # 1. 화구 일치성 검증 (지정 화구 필수 포함, 반대 화구 절대 금지)
-    expected_zone_label = "오른쪽" if goal.zone_id == "right" else "왼쪽"
-    conflicting_zone_label = "왼쪽" if goal.zone_id == "right" else "오른쪽"
-
-    if expected_zone_label not in trimmed:
-        return False, f"지정 화구('{expected_zone_label}') 누락"
-    if conflicting_zone_label in trimmed:
-        return False, f"상충되는 반대 화구('{conflicting_zone_label}') 포함"
-
-    # 2. 방향 및 조작 버튼 검증 (P0: 화력 1단 증가만 허용)
-    if goal.direction == "increase":
-        if "+" not in trimmed and "올" not in trimmed:
-            return False, "화력 증가(+) 버튼 안내 누락"
-        forbidden_direction_keywords = ["-", "내려", "줄여", "감소", "꺼", "종료"]
-        for kw in forbidden_direction_keywords:
-            if kw in trimmed:
-                return False, f"화력 증가에 상충되는 조작 키워드('{kw}') 포함"
-
-    # 3. 추가 조작/조건부 조작/연속 조작 키워드 검증
-    # 단일 물리 조작(1회)을 벗어나 서버 관측/재시도 정책을 우회하는 추가/조건부 조작 일체 금지
-    forbidden_extra_action_keywords = [
-        "한 번 더", "한번 더", "한번더", "두 번 더", "더 눌", "추가", "또", "연이어", "이어서",
-        "누르고", "누른 뒤", "누른 후", "누른 다음", "누르시고", "눌렀다가", "누르면", "눌러서",
-        "터치하고", "터치한 뒤", "터치한 후", "터치한 다음", "클릭하고", "클릭한 뒤",
-        "변화가 없으면", "반응이 없으면", "안 되면", "안 켜지면", "작동하지 않으면", "불이 안 들어오면",
-        "안 올라가면", "안 바뀌면", "확인하고 다시", "확인 후 다시", "확인 뒤 다시",
-        "기다렸다가 다시", "기다린 뒤 다시", "보고 다시",
-    ]
-    for kw in forbidden_extra_action_keywords:
-        if kw in trimmed:
-            return False, f"추가 또는 조건부 조작 유도 키워드('{kw}') 포함"
-
-    if not is_recovery:
-        forbidden_initial_keywords = ["다시", "재차", "재시도"]
-        for kw in forbidden_initial_keywords:
-            if kw in trimmed:
-                return False, f"초기 조작 안내에 부적절한 재시도 키워드('{kw}') 포함"
-    else:
-        if trimmed.count("다시") > 1:
-            return False, "재시도 키워드('다시') 중복 출현"
-
-    # 4. 횟수/스텝 검증 (P0: 1단 증가 = 1회 누름)
-    multi_press_keywords = [
-        "두 번", "세 번", "네 번", "다섯 번", "여섯 번", "일곱 번", "여덟 번", "아홉 번", "열 번",
-        "2번", "3번", "4번", "5번", "6번", "7번", "8번", "9번", "10번",
-        "2회", "3회", "4회", "5회", "여러 번", "연속", "두번", "세번", "다섯번", "반복",
-    ]
-    for kw in multi_press_keywords:
-        if kw in trimmed:
-            return False, f"복수 누름 또는 비정상 횟수 키워드('{kw}') 포함"
-
-    single_press_keywords = ["한 번", "한번", "1번", "1회"]
-    if not any(kw in trimmed for kw in single_press_keywords):
-        return False, "1회 누름 안내('한 번', '1회' 등) 누락"
-
-    # 5. 조작 동사 출현 횟수 검증 (누르/눌러/터치/클릭 등 조작 행위는 문장 전체에서 단 1회만 허용)
-    action_stems = re.findall(r"(?:눌러|누르|누른|누름|터치|클릭|탭)", trimmed)
-    if len(action_stems) > 1:
-        return False, f"복수 조작 동사 출현({len(action_stems)}회): 단일 조작만 허용됨"
-
+    """Only an entire server-owned template is a valid physical instruction."""
+    if text.strip() != instruction_text(goal, is_recovery=is_recovery):
+        return False, "검증된 단일 조작 템플릿과 불일치"
     return True, "유효한 조작 안내"
 
 
@@ -181,10 +119,9 @@ class AgentOrchestrator:
     def build_instruction(self, goal: Goal, action_id: str | None = None) -> Instruction:
         """목표에 맞는 물리 버튼 조작 안내를 생성합니다."""
         act_id = action_id or f"act-{uuid.uuid4().hex[:6]}"
-        zone_label = "오른쪽" if goal.zone_id == "right" else "왼쪽"
         return Instruction(
             action_id=act_id,
-            text=f"{zone_label} 화구의 + 버튼을 한 번 눌러 주세요.",
+            text=instruction_text(goal),
         )
 
     async def plan_and_instruct(
@@ -271,8 +208,13 @@ class AgentOrchestrator:
                     else:
                         instruction = fallback_instruction
                         plan_message = f"LLM 조작 안내 안전 검증 불일치({validation_msg}), 안전 기본 안내 적용"
-                break
-        except FATAL_LLM_ERRORS:
+                    break
+                raise LlmResponseFormatError("모델이 유효한 안내나 Tool 호출을 반환하지 않았습니다.")
+            else:
+                raise LlmResponseFormatError("모델 Tool 루프 한도(3회)를 소진했습니다.")
+        except FATAL_LLM_ERRORS as exc:
+            if getattr(exc, "usage", None) is not None:
+                self.usage.record(exc.usage, exc.model)
             # 치명적 모델 오류(인증/한도/타임아웃/응답형식 등)는 fallback으로 감추지 않고 명시적으로 호출자에게 전파
             raise
         except Exception as exc:
@@ -292,7 +234,10 @@ class AgentOrchestrator:
         ):
             return recovery_result.instruction, "추가 조작을 중단하고 안전 상태를 확인해 주세요."
 
-        fallback_inst = recovery_result.instruction
+        fallback_inst = Instruction(
+            action_id=recovery_result.instruction.action_id,
+            text=instruction_text(goal, is_recovery=True),
+        )
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {
@@ -308,6 +253,8 @@ class AgentOrchestrator:
         try:
             response = await self.llm.generate(messages, tools=None)
             self.usage.record(response.usage, response.model)
+            if response.tool_calls or not response.text or not response.text.strip():
+                raise LlmResponseFormatError("모델이 유효한 복구 안내를 반환하지 않았습니다.")
             if response.text and response.text.strip():
                 text = response.text.strip()
                 is_valid, validation_msg = validate_instruction_against_goal(text, goal, is_recovery=True)
@@ -321,12 +268,13 @@ class AgentOrchestrator:
                         fallback_inst,
                         f"LLM 복구 안내 안전 검증 불일치({validation_msg}), 기본 재조작 안내 적용",
                     )
-        except FATAL_LLM_ERRORS:
+        except FATAL_LLM_ERRORS as exc:
+            if getattr(exc, "usage", None) is not None:
+                self.usage.record(exc.usage, exc.model)
             raise
         except Exception as exc:
             raise LlmProviderError(f"LLM 복구 호출 중단({type(exc).__name__}): {exc}") from exc
 
-        return fallback_inst, "오조작 복구: 기본 재조작 안내 적용"
 
     async def execute_observation_and_verification(
         self,

@@ -611,7 +611,7 @@ def test_recovery_event_and_speech_items_carry_verified_instruction():
     # 1차 계획 생성 응답
     mock_llm.queue_text("오른쪽 화구의 + 버튼을 한 번 눌러 주세요.")
     # 복구 재계획 응답
-    mock_llm.queue_text("출력 변화가 없습니다. 오른쪽 화구의 + 버튼을 다시 한 번 꼭 눌러 주세요.")
+    mock_llm.queue_text("오른쪽 화구의 + 버튼을 다시 한 번 눌러 주세요.")
 
     with patch("app.api.runs.resolve_adapter_for_run", return_value=adapter_nc):
         with patch("app.api.runs.get_llm_provider", return_value=mock_llm):
@@ -638,7 +638,7 @@ def test_recovery_event_and_speech_items_carry_verified_instruction():
             assert step_data["status"] == "awaiting_user"
             act2 = step_data["instruction"]["action_id"]
             assert act2 != act1
-            assert "다시 한 번 꼭" in step_data["instruction"]["text"]
+            assert "다시 한 번" in step_data["instruction"]["text"]
 
             events = step_data["events"]
 
@@ -646,7 +646,7 @@ def test_recovery_event_and_speech_items_carry_verified_instruction():
             recovery_events = [e for e in events if e["kind"] == "recovery" and e.get("action_id") == act2]
             assert len(recovery_events) == 1
             assert recovery_events[0]["message"] == step_data["instruction"]["text"]
-            assert "오른쪽 화구의 + 버튼을 다시 한 번 꼭 눌러 주세요." in recovery_events[0]["message"]
+            assert "오른쪽 화구의 + 버튼을 다시 한 번 눌러 주세요." in recovery_events[0]["message"]
 
             # 내부 계획 완료 설명은 plan 이벤트로 안전하게 분리되어야 함
             plan_events = [e for e in events if e["kind"] == "plan" and e.get("action_id") == act2]

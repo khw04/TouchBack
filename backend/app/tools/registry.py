@@ -10,6 +10,21 @@ from app.tools.sensor_tools import (
 )
 
 
+async def required_preflight(registry: ToolRegistry, zone_id: str) -> list[dict[str, Any]]:
+    """Server-required checks; the LLM cannot skip or substitute them."""
+    calls = []
+    for name, arguments in (
+        ("check_sensor_integrity", {}),
+        ("read_field", {"zone_id": zone_id}),
+    ):
+        result = await registry.execute(name, **arguments)
+        calls.append({
+            "name": name, "arguments": arguments,
+            "result": result.model_dump(), "origin": "required_preflight",
+        })
+    return calls
+
+
 def create_default_registry() -> ToolRegistry:
     """센서 provider가 미설정된 기본 레지스트리 (호출 시 미설정 오류 반환)."""
     registry = ToolRegistry()
@@ -39,6 +54,11 @@ def create_registry_from_adapter(
     for_planning=True인 경우 조작 전 사전 점검 도구(read_field, check_sensor_integrity)만 노출합니다.
     """
     if adapter is None:
+        if for_planning:
+            registry = ToolRegistry()
+            registry.register(ReadFieldTool())
+            registry.register(CheckSensorIntegrityTool())
+            return registry
         return create_default_registry()
 
     if isinstance(adapter, MockSensorAdapter):
@@ -54,24 +74,27 @@ def create_registry_from_adapter(
     def read_field_provider(zid: str) -> dict[str, Any]:
         if hasattr(adapter, "read_baseline"):
             obs = adapter.read_baseline(zid)
-            if obs and obs.device_observation and obs.device_observation.field_summary:
-                return {
-                    "zone_id": zid,
-                    "rms": obs.device_observation.field_summary.rms,
-                    "unit": obs.device_observation.field_summary.unit,
-                    "quality": obs.device_observation.quality.status,
-                    "reasons": obs.device_observation.quality.reasons,
-                    "beep_count": obs.device_observation.beep_count or 0,
-                    "source": source,
-                }
             if obs and obs.device_observation:
+                device = obs.device_observation
+                reasons = list(device.quality.reasons)
+                if device.field_summary is None:
+                    reasons.append("missing_field_summary")
+                if device.zone_id != zid or device.source != source:
+                    reasons.append("baseline_context_mismatch")
+                now_ms = getattr(getattr(adapter, "clock", None), "now_ms", None)
+                end_ms = obs.mapped_window_end_ms
+                if now_ms is None or end_ms is None or not 0 <= now_ms - end_ms <= 500:
+                    reasons.append("baseline_stale_or_unmapped")
                 return {
                     "zone_id": zid,
-                    "rms": 0.0,
-                    "unit": "adc_count",
-                    "quality": obs.device_observation.quality.status,
-                    "reasons": obs.device_observation.quality.reasons,
-                    "beep_count": obs.device_observation.beep_count or 0,
+                    "rms": device.field_summary.rms if device.field_summary else None,
+                    "unit": device.field_summary.unit if device.field_summary else None,
+                    "quality": device.quality.status,
+                    "reasons": reasons,
+                    "clock_sync": "verified" if obs.clock_quality == "verified" else "unsynced",
+                    "calibrated": bool(device.calibration_id) and not any("calibrat" in r for r in reasons),
+                    "saturation": any("saturat" in r for r in reasons),
+                    "beep_count": device.beep_count or 0,
                     "source": source,
                 }
         return {
@@ -88,13 +111,13 @@ def create_registry_from_adapter(
         if hasattr(adapter, "check_sensor_integrity"):
             quality = adapter.check_sensor_integrity()
             connected = quality.status != "invalid" and "disconnected" not in quality.reasons
-            calibrated = quality.status != "invalid"
             clock_sync = "verified" if (connected and "clock_unverified" not in quality.reasons) else "unsynced"
+            baseline = read_field_provider(zone_id or "right")
             return {
                 "connected": connected,
-                "saturation": False,
-                "clock_sync": clock_sync,
-                "calibrated": calibrated,
+                "saturation": baseline.get("saturation", True) or any("saturat" in r for r in quality.reasons),
+                "clock_sync": clock_sync if baseline.get("clock_sync") == "verified" else "unsynced",
+                "calibrated": baseline.get("calibrated", False) and not any("calibrat" in r for r in quality.reasons),
                 "source": source,
                 "quality": quality.status,
                 "reasons": quality.reasons,

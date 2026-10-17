@@ -30,7 +30,7 @@ from app.contracts.models import (
     Zone,
 )
 from app.llm.factory import get_llm_provider
-from app.tools.registry import create_registry_from_adapter
+from app.tools.registry import create_registry_from_adapter, required_preflight
 
 TERMINAL_STATUSES: set[RunStatus] = {"succeeded", "uncertain", "stopped", "failed"}
 TIMEOUT_OBSERVING_SECONDS = 10
@@ -336,9 +336,19 @@ class RunStore:
                 adapter, source=req.source, run_id=run_id, zone_id=goal.zone_id, for_planning=True
             )
             orch = AgentOrchestrator(llm_provider=provider, adapter=adapter, tool_registry=tool_registry)
+
+            async def plan_with_required_checks():
+                planned_goal, planned_instruction, message, _ = await orch.plan_and_instruct(
+                    req.user_input, goal.zone_id, action_id
+                )
+                # These checks are server policy, independent of model Tool selection.
+                # Run immediately before publishing an actionable instruction.
+                orch.executed_tool_calls.extend(await required_preflight(tool_registry, goal.zone_id))
+                return planned_goal, planned_instruction, message, list(orch.executed_tool_calls)
+
             try:
                 _, instruction, plan_detail_msg, executed_tool_calls = run_sync(
-                    orch.plan_and_instruct(req.user_input, goal.zone_id, action_id),
+                    plan_with_required_checks(),
                     timeout=10.0,
                 )
             except Exception as exc:
@@ -643,10 +653,16 @@ class RunStore:
         else:
             adapter = state.adapter or resolve_adapter_for_run(state)
             provider = get_llm_provider(mode=state.execution_mode)
-            tool_registry = create_registry_from_adapter(adapter, source=state.source)
+            tool_registry = create_registry_from_adapter(
+                adapter, source=state.source, run_id=run_id, zone_id=goal.zone_id,
+            )
             orch = AgentOrchestrator(llm_provider=provider, adapter=adapter, tool_registry=tool_registry)
 
+        recovery_llm_error: Exception | None = None
+        recovery_checks: list[dict[str, Any]] = []
+
         async def collect():
+            nonlocal recovery_llm_error, recovery_checks
             verdict, feedback = await orch.execute_observation_and_verification(
                 goal=goal, action_id=action_id, run_id=run_id,
                 window_start_ms=window_start_ms, window_end_ms=window_end_ms,
@@ -668,14 +684,25 @@ class RunStore:
                 if recovery.decision.value == "retry_instruction":
                     try:
                         inst, plan_msg = await orch.replan_recovery_with_llm(goal, recovery)
-                        recovery.instruction = inst
-                        recovery.message = inst.text if inst else ""
-                        recovery.plan_message = plan_msg
                     except FATAL_LLM_ERRORS as exc:
+                        recovery_llm_error = exc
+                        raise
+                    recovery.instruction = inst
+                    recovery.message = inst.text if inst else ""
+                    recovery.plan_message = plan_msg
+                    registry = create_registry_from_adapter(
+                        orch.adapter, source=state.source, run_id=run_id,
+                        zone_id=goal.zone_id, for_planning=True,
+                    )
+                    recovery_checks = await required_preflight(registry, goal.zone_id)
+                    if any(not call["result"]["success"] for call in recovery_checks):
                         recovery.decision = RecoveryDecisionType.ABORT_UNCERTAIN
-                        recovery.message = f"LLM 복구 안내 수립 중 오류({type(exc).__name__})로 추가 조작 중단"
                         recovery.instruction = None
-                        recovery.plan_message = recovery.message
+                        recovery.message = "센서 사전 점검에서 이상이 감지되었습니다. 추가 조작을 중단합니다."
+                        recovery.updated_verdict = Verdict(
+                            status="uncertain", verification_level="none", goal_satisfied=None,
+                            reason_codes=["sensor_integrity_check_failed"], evidence_ids=verdict.evidence_ids,
+                        )
             return verdict, feedback, recovery
 
         try:
@@ -691,6 +718,13 @@ class RunStore:
                 if current and current.status == "observing" and current.generation == expected_generation:
                     reason = "observation_timeout" if isinstance(exc, TimeoutError) else "observation_processing_error"
                     self._finish_observation_error(current, reason)
+                    if recovery_llm_error is not None:
+                        current.status = "failed"
+                        current.instruction = None
+                        current.current_action_id = None
+                        self._add_event(current, "error", f"LLM 복구 안내 수립 실패({type(exc).__name__}). 추가 조작을 중단합니다.", action_id)
+                        if orch.usage.call_count > 0:
+                            self._add_event(current, "plan", f"LLM 복구 토큰 메트릭: {orch.usage.to_event_message()}", action_id)
                 snapshot = self.get_snapshot(current) if current else None
             if isinstance(exc, asyncio.CancelledError):
                 raise
@@ -731,6 +765,10 @@ class RunStore:
             now = self._now_utc()
             current_state.verdict = verdict
             next_status = orch.determine_next_status(verdict)
+            for call in recovery_checks:
+                result = call["result"]
+                detail = "실행 완료" if result["success"] else f"실행 실패: {result['error']}"
+                self._add_event(current_state, "tool_call", f"필수 사전 점검 도구 '{call['name']}' {detail}", action_id)
 
             # C-YD-03 오조작 복구 Skill 연계:
             # 유효한 변화 없음(mismatch/none/no_output_change)인 경우에만 recovering 진입
@@ -790,6 +828,8 @@ class RunStore:
                     feedback = rec_res.message
                 else:  # abort_uncertain
                     next_status = "uncertain"
+                    current_state.instruction = None
+                    current_state.current_action_id = None
                     if rec_res.updated_verdict:
                         current_state.verdict = rec_res.updated_verdict
                     feedback = rec_res.message

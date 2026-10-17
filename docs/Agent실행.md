@@ -40,3 +40,14 @@ Luna는 최종 성능 검증 모델이 아니다. 복잡한 오류 상황에서 
 Mock 센서로 정상(Success), 변화 없음 후 제한된 복구(Recovery), 센서 이상/누락에서 완료 보류(Uncertain)의 3대 시나리오를 검증했다. 목표·계획·Tool·근거·재계획·최종 안내가 실행 기록에 남고 고정 성공 분기로 대체되지 않는다.
 
 참고: [모델 기능/설정](https://developers.openai.com/api/docs/models/gpt-6-luna), [함수 호출](https://developers.openai.com/api/docs/guides/function-calling). 구현 시 현재 SDK 호환 버전을 고정한다.
+
+## PR #16 최신 리뷰 반영 (2026-10-17)
+
+- 물리 조작 문장은 backend/app/agent/instructions.py의 서버 템플릿에서 생성한다. 초기 안내는 `지정 화구의 + 버튼을 한 번 눌러 주세요.`, 복구 안내는 `지정 화구의 + 버튼을 다시 한 번 눌러 주세요.`만 허용한다. 비어 있지 않은 모델 안내가 템플릿과 다르면 안전 템플릿으로 대체하며, 자유 문장은 사용자 조작 이벤트에 싣지 않는다.
+- 초기 안내와 복구 안내를 게시하기 직전에 서버가 `check_sensor_integrity`와 선택 화구의 `read_field`를 필수 실행한다. 모델이 Tool 호출을 생략해도 이 검사를 생략할 수 없다. 기준 관측/자기장 요약 누락, 시계 미검증, 500ms를 벗어난 기준선, 보정 ID 누락, 포화, degraded/invalid 품질 또는 품질 사유가 있으면 안내 없이 uncertain으로 종료한다. 500ms는 기존 Mock 개발 기준이며 실측 확정값이 아니다.
+- OpenAiProvider는 `refusal`, `finish_reason`, 본문 및 Tool 호출 형식을 검사한다. 거절·빈 안내·비정상 종료·Tool 루프 한도 소진(3턴)은 안전 템플릿으로 대체하지 않고 초기/복구 모두 failed로 종료한다. 활성 실행을 해제하고 현재 안내를 제거한다. 사용량이 포함된 거절/비정상 응답도 토큰 메트릭에 보존한다.
+- `backend/tests/test_pr16_safety.py`는 전원 버튼, 지속 누름, 11회 누름, 부정·추가·조건부 조작, Tool 생략, 센서 품질/기준선 오류, HTTP 200의 거절·빈 응답·종료 사유를 API 및 복구 경로로 검증한다. 모의 모델/HTTP를 사용하며 외부 API 요청은 테스트에서 차단한다.
+
+검증 결과: 신규 71개를 포함한 backend pytest 350개, 프런트 node --test 29개, git diff --check 통과. 로컬 .venv 실행기가 참조하는 Python 경로를 사용할 수 없어 설치된 Python 3.13.5와 기존 .venv 의존성으로 검증했다. 실제 OpenAI 호출·과금/사용량 대시보드·실물 센서·브라우저 TTS는 미검증이다.
+
+응답 형식 근거: [OpenAI Chat Completions 공식 문서](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create).

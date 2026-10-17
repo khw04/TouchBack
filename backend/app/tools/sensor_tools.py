@@ -3,6 +3,22 @@ from typing import Any, Callable
 from app.tools.base import BaseTool, ToolResult
 
 
+def sensor_safety_errors(data: dict[str, Any], *, integrity: bool = False) -> list[str]:
+    """Fail closed on missing or compromised sensor safety metadata."""
+    errors = list(data.get("reasons") or [])
+    if data.get("quality") != "valid":
+        errors.append("sensor_quality_not_valid")
+    if integrity and data.get("connected") is not True:
+        errors.append("sensor_disconnected")
+    if data.get("clock_sync") != "verified":
+        errors.append("clock_unverified")
+    if data.get("saturation") is not False:
+        errors.append("sensor_saturation_or_unknown")
+    if data.get("calibrated") is not True:
+        errors.append("calibration_missing")
+    return list(dict.fromkeys(errors))
+
+
 class MockSensorAdapter:
     """명시적인 Mock 센서 어댑터 (출처: mock)."""
 
@@ -26,6 +42,10 @@ class MockSensorAdapter:
             "rms": self.default_rms,
             "unit": "adc_count",
             "quality": "valid",
+            "reasons": [],
+            "clock_sync": "verified" if self.is_connected else "unsynced",
+            "saturation": False,
+            "calibrated": self.is_calibrated,
             "beep_count": 0,
             "source": self.source,
         }
@@ -47,6 +67,8 @@ class MockSensorAdapter:
             "clock_sync": "verified" if self.is_connected else "unsynced",
             "calibrated": self.is_calibrated,
             "source": self.source,
+            "quality": "valid" if self.is_connected else "invalid",
+            "reasons": [],
         }
 
 
@@ -80,9 +102,9 @@ class ReadFieldTool(BaseTool):
             )
 
         data = self._provider(zone_id)
-        if data.get("quality") == "invalid":
-            reasons = data.get("reasons", ["invalid_signal"])
-            reason_str = ", ".join(reasons) if isinstance(reasons, list) else str(reasons)
+        reasons = sensor_safety_errors(data)
+        if reasons:
+            reason_str = ", ".join(reasons)
             return ToolResult(
                 success=False,
                 error=f"화구({zone_id}) 센서 신호 품질 불량: {reason_str}",
@@ -154,9 +176,9 @@ class CheckSensorIntegrityTool(BaseTool):
             )
 
         data = self._provider()
-        if not data.get("connected", True) or data.get("quality") == "invalid":
-            reasons = data.get("reasons", ["sensor_disconnected_or_invalid"])
-            reason_str = ", ".join(reasons) if isinstance(reasons, list) else str(reasons)
+        reasons = sensor_safety_errors(data, integrity=True)
+        if reasons:
+            reason_str = ", ".join(reasons)
             return ToolResult(
                 success=False,
                 error=f"센서 무결성 점검 실패: 연결 또는 신호 상태 이상 ({reason_str})",
