@@ -4,6 +4,7 @@ import os
 from typing import Literal
 
 from pydantic import BaseModel, Field
+from app.adapters.demo_setup import DemoScenario
 
 ExecutionMode = Literal["backend_stub", "mock_llm", "real_llm"]
 
@@ -40,6 +41,8 @@ class Settings(BaseModel):
     openai_model: str = Field(default="gpt-6-luna")
     openai_reasoning_effort: str = Field(default="low")
     execution_mode: ExecutionMode = Field(default="backend_stub")
+    demo_enabled: bool = False
+    mock_scenario: DemoScenario = "normal"
     repo_root: Path = Field(default_factory=find_repo_root)
 
     @classmethod
@@ -59,7 +62,13 @@ class Settings(BaseModel):
         if mode not in ("backend_stub", "mock_llm", "real_llm"):
             mode = "backend_stub"
 
+        demo = os.environ.get("TOUCHBACK_DEMO_ENABLED", env_vars.get("TOUCHBACK_DEMO_ENABLED", "false")).lower()
+        if demo not in ("true", "false", "1", "0"):
+            raise ValueError("TOUCHBACK_DEMO_ENABLED must be true/false or 1/0")
+        scenario = os.environ.get("TOUCHBACK_MOCK_SCENARIO", env_vars.get("TOUCHBACK_MOCK_SCENARIO", "normal"))
         return cls(
+            demo_enabled=demo in ("true", "1"),
+            mock_scenario=scenario,
             openai_api_key=api_key,
             openai_model=model,
             openai_reasoning_effort=reasoning,
