@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Callable
 from pydantic import ValidationError
 from app.adapters.input_buffer import InputBuffer
-from app.contracts.models import DeviceObservation
+from app.contracts.models import DeviceObservation, Observation
 
 
 def unique_object(pairs):
@@ -52,34 +52,46 @@ class JsonLinesDecoder:
 
 
 class SerialAdapter:
-    def __init__(self, transport, *, expected_device_id=None, now_ms=None, utc_now=None):
+    def __init__(self, transport, *, expected_device_id=None, now_ms=None, utc_now=None,
+                 on_observation: Callable[[Observation], None] | None = None, on_error=None):
         timeout = getattr(transport, "timeout", None)
         if timeout is None or not 0 <= timeout <= .1:
             raise ValueError("transport read timeout must be between 0 and 0.1 seconds")
         self._transport = transport
         self._now_ms = now_ms or (lambda: time.monotonic_ns() // 1_000_000)
         self._utc_now = utc_now or (lambda: datetime.now(timezone.utc))
-        self.buffer = InputBuffer("live", expected_device_id)
+        self._on_observation = on_observation
+        self.buffer = InputBuffer("live", expected_device_id, on_error=on_error)
         self._closed = False
         self._decoder = JsonLinesDecoder(self._ingest, self.buffer.invalidate)
 
     @classmethod
-    def open(cls, port: str, *, baudrate: int = 115200, expected_device_id=None):
+    def open(cls, port: str, *, baudrate: int = 115200, expected_device_id=None,
+             on_observation=None, on_error=None):
         import serial
         transport = serial.Serial(port=port, baudrate=baudrate, timeout=.05, write_timeout=.05)
-        return cls(transport, expected_device_id=expected_device_id)
+        return cls(transport, expected_device_id=expected_device_id,
+                   on_observation=on_observation, on_error=on_error)
 
     def _ingest(self, observation):
-        self.buffer.ingest(observation, self._now_ms(), self._utc_now())
+        record = self.buffer.ingest(observation, self._now_ms(), self._utc_now())
+        if record is not None and self._on_observation is not None:
+            self._on_observation(record)
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
 
     def poll(self) -> None:
         if self._closed:
             return
         try:
-            self._decoder.feed(self._transport.read(4096))
+            chunk = self._transport.read(4096)
         except OSError:
             self.buffer.invalidate("disconnected")
             self.close()
+            return
+        self._decoder.feed(chunk)
 
     def read_baseline(self, zone_id):
         self.buffer.validate_zone(zone_id)
@@ -111,9 +123,13 @@ class SerialAdapter:
     def close(self) -> None:
         if not self._closed:
             self._closed = True
-            self._decoder.finish()
-            self._transport.close()
-            self.buffer.invalidate("disconnected")
+            try:
+                self._decoder.finish()
+            finally:
+                try:
+                    self._transport.close()
+                finally:
+                    self.buffer.invalidate("disconnected")
 
     def __enter__(self):
         return self
