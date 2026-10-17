@@ -108,6 +108,25 @@ test("only the current action can be spoken after recovery", () => {
   assert.deepEqual(freshSpeechItems(new Set(), run).messages.map(item => item.message), ["새 안내"]);
 });
 
+test("freshSpeechItems selects user-facing instruction sentence from recovery response and ignores internal plan description", () => {
+  const run = {
+    status: "awaiting_user",
+    instruction: { action_id: "act-rec-2", text: "오른쪽 화구의 + 버튼을 다시 한 번 꼭 눌러 주세요." },
+    events: [
+      { event_id: "e1", action_id: "act-1", kind: "instruction", message: "오른쪽 화구의 + 버튼을 한 번 눌러 주세요." },
+      { event_id: "e2", action_id: "act-1", kind: "observation", message: "관측 처리 종료. 판정 수준과 근거를 확인해 주세요." },
+      { event_id: "e3", action_id: "act-rec-2", kind: "plan", message: "LLM 재조작 안내 수립 완료" },
+      { event_id: "e4", action_id: "act-rec-2", kind: "recovery", message: "오른쪽 화구의 + 버튼을 다시 한 번 꼭 눌러 주세요." },
+      { event_id: "e5", action_id: "act-rec-2", kind: "instruction", message: "오른쪽 화구의 + 버튼을 다시 한 번 꼭 눌러 주세요." },
+      { event_id: "e6", action_id: "act-rec-2", kind: "plan", message: "LLM 복구 토큰 메트릭: model: mock, tokens: 45" },
+    ],
+  };
+  const speech = freshSpeechItems(new Set(), run);
+  const messages = speech.messages.map(item => item.message);
+  assert.deepEqual(messages, ["오른쪽 화구의 + 버튼을 다시 한 번 꼭 눌러 주세요."]);
+  assert(!messages.includes("LLM 재조작 안내 수립 완료"));
+});
+
 test("UI fixture reports uncertain and never server success", async () => {
   const fixture = createFixture();
   const started = await fixture.start("오른쪽 화력 올려줘", "mock", "right");

@@ -228,7 +228,7 @@ def test_recovery_skill_first_retry_reissues_instruction_with_fresh_baseline():
     assert result.instruction.action_id.startswith("act-retry-")
     assert result.next_window_start_ms == 4500
     assert result.next_window_end_ms == 7500
-    assert "오른쪽 화구의 + 버튼을 다시 한 번 꾹 눌러 주세요" in result.instruction.text
+    assert "오른쪽 화구의 + 버튼을 다시 한 번 눌러 주세요" in result.instruction.text
 
 
 def test_recovery_skill_second_retry_aborts_to_uncertain():

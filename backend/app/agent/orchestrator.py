@@ -1,10 +1,14 @@
 """Agent Orchestrator (C-YD-02): plan, instruct, observe, and verify intent."""
+import asyncio
+from dataclasses import dataclass
+import json
 from typing import Any
 import uuid
 
 from app.contracts.goal_policy import interpret_p0_goal
-from app.agent.prompts import get_verdict_message
-from app.agent.recovery import MisoperationRecoverySkill, RecoveryResult, default_recovery_skill
+from app.agent.instructions import instruction_text
+from app.agent.prompts import SYSTEM_PROMPT, get_verdict_message
+from app.agent.recovery import MisoperationRecoverySkill, RecoveryDecisionType, RecoveryResult, default_recovery_skill
 from app.agent.verifier import IntentVerifier, default_verifier
 from app.contracts.models import (
     Goal,
@@ -14,10 +18,75 @@ from app.contracts.models import (
     Verdict,
     Zone,
 )
-from app.llm.base import BaseLlmProvider
+from app.llm.base import BaseLlmProvider, LlmUsage
 from app.llm.mock_provider import MockLlmProvider
-from app.tools.base import ToolRegistry
+from app.llm.openai_provider import (
+    LlmAuthenticationError,
+    LlmProviderError,
+    LlmRateLimitError,
+    LlmResponseFormatError,
+    LlmTimeoutError,
+    MissingApiKeyError,
+)
+from app.tools.base import ToolRegistry, ToolResult
+from app.tools.registry import default_tool_registry
 from app.verification.models import ActionContext
+
+FATAL_LLM_ERRORS = (
+    MissingApiKeyError,
+    LlmAuthenticationError,
+    LlmRateLimitError,
+    LlmTimeoutError,
+    LlmProviderError,
+    LlmResponseFormatError,
+    TimeoutError,
+    asyncio.TimeoutError,
+    json.JSONDecodeError,
+    KeyError,
+    IndexError,
+)
+
+
+def validate_instruction_against_goal(
+    text: str,
+    goal: Goal,
+    is_recovery: bool = False,
+) -> tuple[bool, str]:
+    """Only an entire server-owned template is a valid physical instruction."""
+    if text.strip() != instruction_text(goal, is_recovery=is_recovery):
+        return False, "검증된 단일 조작 템플릿과 불일치"
+    return True, "유효한 조작 안내"
+
+
+@dataclass
+class UsageSummary:
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    reasoning_tokens: int = 0
+    total_tokens: int = 0
+    call_count: int = 0
+    model: str = ""
+
+    def record(self, usage: LlmUsage | None, model: str = "") -> None:
+        if usage:
+            self.prompt_tokens += usage.prompt_tokens
+            self.completion_tokens += usage.completion_tokens
+            self.reasoning_tokens += usage.reasoning_tokens
+            self.total_tokens += usage.total_tokens
+        self.call_count += 1
+        if model:
+            self.model = model
+
+    def to_event_message(self) -> str:
+        parts = [f"model: {self.model or 'unknown'}"]
+        parts.append(f"calls: {self.call_count}")
+        parts.append(
+            f"tokens: {self.total_tokens} (prompt: {self.prompt_tokens}, completion: {self.completion_tokens}"
+        )
+        if self.reasoning_tokens > 0:
+            parts[-1] += f", reasoning: {self.reasoning_tokens}"
+        parts[-1] += ")"
+        return ", ".join(parts)
 
 
 class AgentOrchestrator:
@@ -35,7 +104,9 @@ class AgentOrchestrator:
         self.adapter = adapter
         self.verifier = verifier or default_verifier
         self.recovery = recovery_skill or default_recovery_skill
-        self.tools = tool_registry
+        self.tools = tool_registry or default_tool_registry
+        self.usage = UsageSummary()
+        self.executed_tool_calls: list[dict[str, Any]] = []
 
     def interpret_goal(
         self,
@@ -48,11 +119,162 @@ class AgentOrchestrator:
     def build_instruction(self, goal: Goal, action_id: str | None = None) -> Instruction:
         """목표에 맞는 물리 버튼 조작 안내를 생성합니다."""
         act_id = action_id or f"act-{uuid.uuid4().hex[:6]}"
-        zone_label = "오른쪽" if goal.zone_id == "right" else "왼쪽"
         return Instruction(
             action_id=act_id,
-            text=f"{zone_label} 화구의 + 버튼을 한 번 눌러 주세요.",
+            text=instruction_text(goal),
         )
+
+    async def plan_and_instruct(
+        self,
+        user_input: str,
+        zone_id: Zone | None,
+        action_id: str | None = None,
+    ) -> tuple[Goal | None, Instruction | None, str, list[dict[str, Any]]]:
+        """LLM 및 등록된 Tool을 활용하여 사전 상태를 점검하고 조작 안내를 생성합니다.
+
+        P0 안전 게이트(interpret_p0_goal)를 선행하여 비정상/미지원 목표의 임의 실행을 원천 차단합니다.
+        """
+        goal, clarification = self.interpret_goal(user_input, zone_id)
+        if goal is None:
+            return None, None, clarification or "지원하지 않는 목표입니다.", []
+
+        act_id = action_id or f"act-{uuid.uuid4().hex[:6]}"
+        fallback_instruction = self.build_instruction(goal, act_id)
+
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": (
+                    f"사용자 요청: '{user_input}'. "
+                    f"선택 화구: '{goal.zone_id}'. "
+                    "필요한 경우 센서 도구를 사용하여 사전 상태를 점검한 후, "
+                    "사용자가 따라야 할 1문장의 안전한 물리 버튼 조작 안내를 생성해 주세요."
+                ),
+            },
+        ]
+
+        tool_schemas = self.tools.to_openai_tools() if self.tools else None
+        executed_tool_calls: list[dict[str, Any]] = []
+        self.executed_tool_calls = []
+
+        instruction = fallback_instruction
+        plan_message = "목표 해석 및 기본 조작 안내 생성"
+
+        try:
+            for _ in range(3):
+                response = await self.llm.generate(messages, tools=tool_schemas)
+                self.usage.record(response.usage, response.model)
+
+                if response.tool_calls:
+                    assistant_tool_calls = []
+                    for tc in response.tool_calls:
+                        assistant_tool_calls.append({
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {"name": tc.name, "arguments": json.dumps(tc.arguments)},
+                        })
+                    messages.append({
+                        "role": "assistant",
+                        "content": response.text,
+                        "tool_calls": assistant_tool_calls,
+                    })
+
+                    for tc in response.tool_calls:
+                        if self.tools:
+                            res = await self.tools.execute(tc.name, **tc.arguments)
+                        else:
+                            res = ToolResult(success=False, error="Tool registry가 없습니다.")
+                        call_entry = {
+                            "name": tc.name,
+                            "arguments": tc.arguments,
+                            "result": res.model_dump(),
+                        }
+                        executed_tool_calls.append(call_entry)
+                        self.executed_tool_calls.append(call_entry)
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "content": json.dumps(res.model_dump(), ensure_ascii=False),
+                        })
+                    continue
+
+                if response.text and response.text.strip():
+                    text = response.text.strip()
+                    is_valid, validation_msg = validate_instruction_against_goal(text, goal)
+                    if is_valid:
+                        instruction = Instruction(action_id=act_id, text=text)
+                        plan_message = "LLM 목표 분석 및 조작 안내 수립 완료"
+                    else:
+                        instruction = fallback_instruction
+                        plan_message = f"LLM 조작 안내 안전 검증 불일치({validation_msg}), 안전 기본 안내 적용"
+                    break
+                raise LlmResponseFormatError("모델이 유효한 안내나 Tool 호출을 반환하지 않았습니다.")
+            else:
+                raise LlmResponseFormatError("모델 Tool 루프 한도(3회)를 소진했습니다.")
+        except FATAL_LLM_ERRORS as exc:
+            if getattr(exc, "usage", None) is not None:
+                self.usage.record(exc.usage, exc.model)
+            # 치명적 모델 오류(인증/한도/타임아웃/응답형식 등)는 fallback으로 감추지 않고 명시적으로 호출자에게 전파
+            raise
+        except Exception as exc:
+            raise LlmProviderError(f"LLM 계획 호출 중단({type(exc).__name__}): {exc}") from exc
+
+        return goal, instruction, plan_message, executed_tool_calls
+
+    async def replan_recovery_with_llm(
+        self,
+        goal: Goal,
+        recovery_result: RecoveryResult,
+    ) -> tuple[Instruction | None, str]:
+        """오조작 복구 결정(RecoveryResult)에 따라 LLM을 호출하여 명확한 재조작 안내를 생성합니다."""
+        if (
+            recovery_result.decision != RecoveryDecisionType.RETRY_INSTRUCTION
+            or not recovery_result.instruction
+        ):
+            return recovery_result.instruction, "추가 조작을 중단하고 안전 상태를 확인해 주세요."
+
+        fallback_inst = Instruction(
+            action_id=recovery_result.instruction.action_id,
+            text=instruction_text(goal, is_recovery=True),
+        )
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": (
+                    f"이전 조작에서 출력 변화가 감지되지 않았습니다. 화구: {goal.zone_id}. "
+                    "단 1회의 재조작 기회가 남았습니다. 사용자가 버튼을 다시 정확히 누를 수 있도록 "
+                    "간결하고 명확한 1문장 조작 안내를 제시해 주세요."
+                ),
+            },
+        ]
+
+        try:
+            response = await self.llm.generate(messages, tools=None)
+            self.usage.record(response.usage, response.model)
+            if response.tool_calls or not response.text or not response.text.strip():
+                raise LlmResponseFormatError("모델이 유효한 복구 안내를 반환하지 않았습니다.")
+            if response.text and response.text.strip():
+                text = response.text.strip()
+                is_valid, validation_msg = validate_instruction_against_goal(text, goal, is_recovery=True)
+                if is_valid:
+                    return (
+                        Instruction(action_id=fallback_inst.action_id, text=text),
+                        "LLM 재조작 안내 수립 완료",
+                    )
+                else:
+                    return (
+                        fallback_inst,
+                        f"LLM 복구 안내 안전 검증 불일치({validation_msg}), 기본 재조작 안내 적용",
+                    )
+        except FATAL_LLM_ERRORS as exc:
+            if getattr(exc, "usage", None) is not None:
+                self.usage.record(exc.usage, exc.model)
+            raise
+        except Exception as exc:
+            raise LlmProviderError(f"LLM 복구 호출 중단({type(exc).__name__}): {exc}") from exc
+
 
     async def execute_observation_and_verification(
         self,
