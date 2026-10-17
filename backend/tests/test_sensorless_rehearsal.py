@@ -173,3 +173,14 @@ def test_unexpected_terminal_is_preserved_as_failure_not_replaced_with_expected(
     case = report['cases'][0]
     assert report['status'] == 'failed' and case['outcome'] == 'unexpected'
     assert case['snapshot']['status'] == 'failed' and case['expected_run_status'] == 'succeeded'
+
+
+def test_recovery_requires_new_action_even_when_server_returns_success(client, monkeypatch):
+    import app.api.runs as runs
+    original = runs.build_demo_adapter
+    monkeypatch.setattr(runs, 'build_demo_adapter', lambda scenario, *, zone_id: original('normal', zone_id=zone_id))
+    report = run_rehearsal(client, scenarios=('recovery',))
+    case = report['cases'][0]
+    assert case['snapshot']['status'] == 'succeeded'
+    assert len(case['actions']) == 1 and case['expected_action_count'] == 2
+    assert case['outcome'] == 'unexpected' and report['status'] == 'failed'

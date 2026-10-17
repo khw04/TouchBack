@@ -72,7 +72,9 @@ def run_rehearsal(client, *, scenarios=("normal", "recovery", "sensor_error"), z
         for scenario in scenarios:
             started = monotonic()
             case = {"scenario": scenario, "iteration": iteration, "zone": zone, "run_id": None,
-                    "expected_run_status": EXPECTED[scenario], "outcome": "error", "actions": [],
+                    "expected_run_status": EXPECTED[scenario],
+                    "expected_action_count": 2 if scenario in ("recovery", "recovery_exhausted") else 1,
+                    "outcome": "error", "actions": [],
                     "snapshot": None, "cleanup_confirmed": False, "error": None}
             create_sent = False
             try:
@@ -106,7 +108,8 @@ def run_rehearsal(client, *, scenarios=("normal", "recovery", "sensor_error"), z
                 success_supported = run.status != "succeeded" or (run.verdict is not None
                     and run.verdict.status == "success" and run.verdict.verification_level == "exact_step"
                     and run.verdict.goal_satisfied is True and bool(run.verdict.evidence_ids))
-                case["outcome"] = "matched" if run.status == EXPECTED[scenario] and success_supported else "unexpected"
+                case["outcome"] = ("matched" if run.status == EXPECTED[scenario] and success_supported
+                    and len(case["actions"]) == case["expected_action_count"] else "unexpected")
                 case["cleanup_confirmed"] = True
             except (httpx.HTTPError, ValueError, TypeError, KeyError, AttributeError) as error:
                 # Store no request headers, API keys or provider response bodies.
