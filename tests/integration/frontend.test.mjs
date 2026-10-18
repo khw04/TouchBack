@@ -399,3 +399,120 @@ test("demo settings cannot change during planning, observation or uncertain star
   assert.equal(demoControlsDisabled({startUnknown:true}),true);
   assert.equal(demoLabel("recovery"),"미인식 후 한 번 복구");
 });
+
+test("actual app blocks form submission and speech while initial demo lookup is pending", async () => {
+  const {loadApp,ok,demoMetadata,activeRun,flush}=await import('./app-harness.mjs');
+  let release,starts=0;
+  const pending=new Promise(resolve=>{release=resolve;});
+  const app=await loadApp(async (url,options)=>{
+    if(url==='/api/demo')return pending;
+    if(options.method==='POST'){starts++;return ok(activeRun);}
+    return ok(activeRun);
+  });
+  try {
+    assert.equal(app.el('start').disabled,true);
+    assert.equal(app.el('demo-controls').hidden,false);
+    await app.el('goal-form').fire('submit');
+    assert.equal(starts,0);assert.deepEqual(app.spoken,[]);
+    release(ok(demoMetadata));await flush();
+    assert.equal(app.el('start').disabled,false);
+    await app.el('goal-form').fire('submit');
+    assert.equal(starts,1);
+    assert.match(app.el('phase-detail').textContent,/실물은 조작하지 말고/);
+  } finally { release(ok(demoMetadata));await flush();app.close(); }
+});
+
+test("actual app keeps failed initial lookup locked and exposes successful retry", async () => {
+  const {loadApp,ok,demoMetadata}=await import('./app-harness.mjs');
+  let requests=0,starts=0;
+  const app=await loadApp(async (url)=>{
+    if(url==='/api/demo'){if(++requests===1)throw new Error('offline');return ok(demoMetadata);}
+    starts++;throw new Error('must not start');
+  });
+  try {
+    assert.equal(app.el('start').disabled,true);
+    assert.equal(app.el('demo-controls').hidden,false);
+    assert.equal(app.el('demo-reload').disabled,false);
+    assert.match(app.el('demo-status').textContent,/확인하지 못|확인할 수 없/);
+    await app.el('goal-form').fire('submit');assert.equal(starts,0);assert.deepEqual(app.spoken,[]);
+    await app.el('demo-reload').fire('click');
+    assert.equal(app.el('start').disabled,false);
+    assert.equal(app.el('demo-scenario').value,'normal');
+  } finally { app.close(); }
+});
+
+test("actual app preserves unknown selection after a subsequent 409 until confirmed lookup", async () => {
+  const {loadApp,ok,demoMetadata}=await import('./app-harness.mjs');
+  let selected='normal',changes=0;
+  const app=await loadApp(async (url,options)=>{
+    if(options.method==='GET')return ok({...demoMetadata,scenario:selected});
+    if(++changes===1){selected='recovery';throw new Error('response lost');}
+    return {ok:false,status:409,json:async()=>({code:'busy',message:'other tab active'})};
+  });
+  try {
+    app.el('demo-scenario').value='recovery';await app.el('demo-apply').fire('click');
+    assert.equal(app.el('start').disabled,true);
+    await app.el('demo-apply').fire('click');
+    assert.equal(app.el('start').disabled,true);
+    await app.el('demo-reload').fire('click');
+    assert.equal(app.el('start').disabled,false);assert.equal(app.el('demo-scenario').value,'recovery');
+  } finally { app.close(); }
+});
+
+test("actual app distinguishes confirmed disabled metadata and fixture from unknown", async () => {
+  const {loadApp,ok}=await import('./app-harness.mjs');
+  let calls=0;
+  const app=await loadApp(async()=>{calls++;return ok({enabled:false});});
+  try {assert.equal(app.el('start').disabled,false);assert.equal(app.el('demo-controls').hidden,true);}
+  finally {app.close();}
+  const fixture=await loadApp(async()=>{throw new Error('fixture must not fetch');},'?fixture=1');
+  try {assert.equal(fixture.el('start').disabled,false);assert.equal(fixture.el('demo-controls').hidden,true);assert.equal(calls,1);}
+  finally {fixture.close();}
+});
+
+test("actual app hides resumed instructions and speech until demo settings are confirmed", async () => {
+  const {loadApp,ok,demoMetadata,activeRun}=await import('./app-harness.mjs');
+  let reads=0;
+  const app=await loadApp(async url=>{
+    if(url==='/api/demo'){if(++reads===1)throw new Error('offline');return ok(demoMetadata);}
+    return ok(activeRun);
+  });
+  try {
+    app.el('resume-id').value='run-test';await app.el('resume-form').fire('submit');
+    assert.equal(app.el('ack').disabled,true);assert.equal(app.el('repeat').disabled,true);
+    assert.match(app.el('instruction').textContent,/보류/);assert.deepEqual(app.spoken,[]);
+    await app.el('demo-reload').fire('click');
+    assert.equal(app.el('ack').disabled,false);
+    assert.match(app.el('phase-detail').textContent,/실물은 조작하지 말고/);
+  } finally {app.close();}
+});
+
+test("actual app treats malformed initial metadata as unknown rather than disabled", async () => {
+  const {loadApp,ok}=await import('./app-harness.mjs');
+  let reads=0;
+  const app=await loadApp(async()=>ok(++reads===1?{}:{enabled:false}));
+  try {
+    assert.equal(app.el('start').disabled,true);assert.equal(app.el('demo-controls').hidden,false);
+    await app.el('demo-reload').fire('click');
+    assert.equal(app.el('start').disabled,false);assert.equal(app.el('demo-controls').hidden,true);
+  } finally {app.close();}
+});
+
+test("metadata retry cannot unmask a run whose server snapshot is unverified", async () => {
+  const {loadApp,ok,demoMetadata,activeRun}=await import('./app-harness.mjs');
+  let runReads=0;
+  const app=await loadApp(async(url,options)=>{
+    if(url==='/api/demo')return ok(demoMetadata);
+    if(options.method==='GET' && ++runReads>1)throw new Error('run connection lost');
+    return ok(activeRun);
+  });
+  try {
+    await app.el('goal-form').fire('submit');
+    await app.el('retry').fire('click');
+    const masked=app.el('instruction').textContent;
+    assert.doesNotMatch(masked,/\+ 버튼/);
+    await app.el('demo-reload').fire('click');
+    assert.equal(app.el('instruction').textContent,masked);
+    assert.equal(app.el('ack').disabled,true);
+  } finally {app.close();}
+});

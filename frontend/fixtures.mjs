@@ -1,4 +1,4 @@
-import { TERMINAL } from "./api.mjs?v=16";
+import { TERMINAL } from "./api.mjs?v=17";
 const now = () => new Date().toISOString();
 let sequence = 0;
 
