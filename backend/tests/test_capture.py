@@ -191,3 +191,52 @@ def test_capture_summary_failed_but_port_closed_when_shutdown_event_write_fails(
     assert result["status"] == "failed" and result["observations"] == 1
     assert result["errors"]["close_failed"] == 1
     assert transports[0].closed
+
+# Even within the existing 8192-byte limit, native JSON recursion can fail.
+DEEP_JSON = [b'[' * 3500 + b'0' + b']' * 3500,
+             b'[' * 4000 + b'0' + b']' * 4000]
+
+
+@pytest.mark.parametrize('payload', DEEP_JSON, ids=['depth-3500','depth-4000'])
+def test_deep_json_is_parse_error_and_next_frame_survives(payload):
+    from app.adapters.serial_input import JsonLinesDecoder
+    observations, errors = [], []
+    decoder = JsonLinesDecoder(observations.append, errors.append)
+    data = payload + b'\n' + (frame().model_dump_json() + '\n').encode()
+    assert len(payload) + 1 <= 8192
+    decoder.feed(data[:100])
+    decoder.feed(data[100:])
+    decoder.finish()
+    assert errors == ['parse_error']
+    assert observations == [frame()]
+
+
+@pytest.mark.parametrize('payload', DEEP_JSON, ids=['depth-3500','depth-4000'])
+def test_replay_rejects_deep_json_as_value_error_without_partial_loading(tmp_path, payload):
+    path = tmp_path / 'deep.jsonl'
+    path.write_bytes(payload + b'\n')
+    with pytest.raises(ValueError, match='invalid replay observation JSON'):
+        ReplayAdapter.from_file(path)
+
+
+def test_capture_keeps_following_frame_after_deep_json_and_records_error(tmp_path):
+    payload = DEEP_JSON[0] + b'\n' + (frame().model_dump_json() + '\n').encode()
+    path, summary = run_capture(tmp_path, [payload[:100], payload[100:]])
+    assert summary['observations'] == 1
+    assert summary['errors'] == {'parse_error':1}
+    records = (path/'observations.jsonl').read_text(encoding='utf-8').splitlines()
+    assert len(records) == 1
+    record = json.loads(records[0])
+    assert record['clock_quality'] == 'unverified'
+    assert record['device_observation']['quality']['status'] == 'invalid'
+    assert 'parse_error' in record['device_observation']['quality']['reasons']
+
+
+def test_replay_parse_error_does_not_echo_malformed_input(tmp_path):
+    path = tmp_path/'invalid.jsonl'
+    sentinel = 'synthetic-private-marker'
+    path.write_text(json.dumps({'unexpected':sentinel})+'\n',encoding='utf-8')
+    with pytest.raises(ValueError) as error:
+        ReplayAdapter.from_file(path)
+    assert sentinel not in str(error.value)
+    assert str(error.value) == 'invalid replay observation JSON'

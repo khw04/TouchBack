@@ -31,7 +31,7 @@ class JsonLinesDecoder:
                     try:
                         payload = json.loads(self._line.decode("utf-8"), object_pairs_hook=unique_object)
                         device = DeviceObservation.model_validate(payload)
-                    except (ValueError, UnicodeError, ValidationError):
+                    except (ValueError, UnicodeError, ValidationError, RecursionError):
                         self.on_error("parse_error")
                     else:
                         self.on_observation(device)
