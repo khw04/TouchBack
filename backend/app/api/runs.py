@@ -661,7 +661,7 @@ class RunStore:
         recovery_llm_error: Exception | None = None
         recovery_checks: list[dict[str, Any]] = []
 
-        async def collect():
+        async def collect_result():
             nonlocal recovery_llm_error, recovery_checks
             verdict, feedback = await orch.execute_observation_and_verification(
                 goal=goal, action_id=action_id, run_id=run_id,
@@ -705,6 +705,18 @@ class RunStore:
                         )
             return verdict, feedback, recovery
 
+        async def collect():
+            try:
+                return await collect_result()
+            finally:
+                # Billing facts belong to this worker, independent of state publication.
+                # This also runs if the caller timed out while the worker was still waiting.
+                if orch.usage.call_count > 0:
+                    with self._lock:
+                        current = self._runs.get(run_id)
+                        if current is state:
+                            self._add_event(current, "plan", f"LLM 복구 토큰 메트릭: {orch.usage.to_event_message()}", action_id)
+
         try:
             # Sensor adapters are synchronous. Keep their waits outside the event loop and store lock.
             remaining = max(0, TIMEOUT_OBSERVING_SECONDS -
@@ -723,8 +735,6 @@ class RunStore:
                         current.instruction = None
                         current.current_action_id = None
                         self._add_event(current, "error", f"LLM 복구 안내 수립 실패({type(exc).__name__}). 추가 조작을 중단합니다.", action_id)
-                        if orch.usage.call_count > 0:
-                            self._add_event(current, "plan", f"LLM 복구 토큰 메트릭: {orch.usage.to_event_message()}", action_id)
                 snapshot = self.get_snapshot(current) if current else None
             if isinstance(exc, asyncio.CancelledError):
                 raise
@@ -805,13 +815,6 @@ class RunStore:
                         message=rec_res.instruction.text,
                         evidence_ids=verdict.evidence_ids,
                     )
-                    if hasattr(orch, "usage") and orch.usage.call_count > 0:
-                        self._add_event(
-                            current_state,
-                            kind="plan",
-                            action_id=rec_res.instruction.action_id,
-                            message=f"LLM 복구 토큰 메트릭: {orch.usage.to_event_message()}",
-                        )
                     return RunResponse(
                         run_id=current_state.run_id,
                         status=current_state.status,
@@ -852,13 +855,6 @@ class RunStore:
                 message=feedback,
                 evidence_ids=verdict.evidence_ids,
             )
-            if hasattr(orch, "usage") and orch.usage.call_count > 0:
-                self._add_event(
-                    current_state,
-                    kind="plan",
-                    action_id=action_id,
-                    message=f"LLM 관측/복구 토큰 메트릭: {orch.usage.to_event_message()}",
-                )
 
             if next_status in TERMINAL_STATUSES and self._active_run_id == run_id:
                 self._active_run_id = None
