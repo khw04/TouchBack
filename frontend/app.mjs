@@ -1,11 +1,11 @@
-import { demoLabel, demoControlsDisabled } from "./demo.mjs?v=16";
-import { createApi, freshSpeechItems, TERMINAL } from "./api.mjs?v=16";
-import { createFixture } from "./fixtures.mjs?v=16";
-import { actionFor, claimableSuccess, phaseFor, unverifiedSnapshot, verdictLabel } from "./presentation.mjs?v=16";
-import { eventChange, eventLabel, eventSource } from "./events.mjs?v=16";
-import { canSendAction, connectionLabel } from "./connection.mjs?v=16";
-import { evidenceReport, evidenceFilename } from "./evidence.mjs?v=16";
-import { createReadGate, regressesTerminalState } from "./read-gate.mjs?v=16";
+import { demoLabel, demoControlsDisabled } from "./demo.mjs?v=17";
+import { createApi, freshSpeechItems, TERMINAL } from "./api.mjs?v=17";
+import { createFixture } from "./fixtures.mjs?v=17";
+import { actionFor, claimableSuccess, phaseFor, unverifiedSnapshot, verdictLabel } from "./presentation.mjs?v=17";
+import { eventChange, eventLabel, eventSource } from "./events.mjs?v=17";
+import { canSendAction, connectionLabel } from "./connection.mjs?v=17";
+import { evidenceReport, evidenceFilename } from "./evidence.mjs?v=17";
+import { createReadGate, regressesTerminalState } from "./read-gate.mjs?v=17";
 
 const $ = id => document.getElementById(id);
 const params = new URLSearchParams(location.search);
@@ -15,7 +15,8 @@ const state = { runId: null, run: null, busy: false, connection: "unknown", last
   startUnknown: false, seen: new Set(), renderedEventIds: [], lastSpoken: "", polling: null, submittedRequest: null };
 const observationRequests = new Set();
 state.demo = null;
-state.demoUnverified = false;
+state.demoUnverified = !fixtureMode;
+state.demoLoading = false;
 const reads = createReadGate(() => state.runId);
 const statusText = {
   planning: "계획 중", awaiting_clarification: "추가 확인 필요", awaiting_user: "사용자 조작 대기",
@@ -31,15 +32,15 @@ $("resume-form").hidden = fixtureMode;
 
 function controls() {
   const run = state.run;
-  $("demo-apply").disabled = demoControlsDisabled(state);
-  $("demo-scenario").disabled = demoControlsDisabled(state);
-  $("demo-reload").disabled = state.busy;
+  $("demo-apply").disabled = !state.demo || demoControlsDisabled(state);
+  $("demo-scenario").disabled = !state.demo || demoControlsDisabled(state);
+  $("demo-reload").disabled = state.busy || state.demoLoading;
   const writable = canSendAction(fixtureMode ? "fixture" : "server", state.connection);
   $("start").disabled = state.busy || state.startUnknown || state.demoUnverified || ["offline", "invalid", "unverified"].includes(state.connection) || Boolean(run && !TERMINAL.has(run.status));
-  $("ack").disabled = state.busy || !writable || !run?.instruction?.action_id || run.status !== "awaiting_user";
+  $("ack").disabled = state.busy || state.demoUnverified || !writable || !run?.instruction?.action_id || run.status !== "awaiting_user";
   $("cancel").disabled = state.busy || !writable || !run || TERMINAL.has(run.status);
   $("retry").disabled = state.busy || !state.runId || fixtureMode;
-  $("repeat").disabled = state.busy || !speechAvailable || !state.lastSpoken || (!fixtureMode && ["offline", "invalid", "unverified"].includes(state.connection));
+  $("repeat").disabled = state.busy || state.demoUnverified || !speechAvailable || !state.lastSpoken || (!fixtureMode && ["offline", "invalid", "unverified"].includes(state.connection));
   $("resume").disabled = fixtureMode || state.busy || Boolean(run && !TERMINAL.has(run.status));
   $("export-evidence").setAttribute("aria-disabled", String(!run?.run_id));
   if (run?.run_id) $("export-evidence").setAttribute("href", "#");
@@ -93,7 +94,7 @@ function showError(message) {
 }
 function clearError() { $("error").hidden = true; $("error").textContent = ""; }
 function speak(message) {
-  if (!speechAvailable || !message) return;
+  if (!speechAvailable || !message || state.demoUnverified) return;
   state.lastSpoken = message;
   speechSynthesis.cancel();
   const utterance = new SpeechSynthesisUtterance(message);
@@ -131,6 +132,21 @@ function renderEvents(items) {
   }
   state.renderedEventIds = change.ids;
 }
+function renderAction(run) {
+  if (state.demoUnverified) {
+    $("phase").textContent = "실행 설정 확인 대기";
+    $("phase-detail").textContent = "설정 확인 전에는 실물을 조작하지 마세요. 시연 설정 다시 확인을 누르세요.";
+    $("instruction").textContent = "실행 설정을 확인할 때까지 조작 안내를 보류합니다.";
+    state.lastSpoken = "";
+    if (speechAvailable) speechSynthesis.cancel();
+    return;
+  }
+  const [phase, detail] = phaseFor(run);
+  $("phase").textContent = phase;
+  $("phase-detail").textContent = state.demo && run.source === "mock" && run.status === "awaiting_user"
+    ? "실물은 조작하지 말고, 안내를 확인한 뒤 완료 알림을 눌러 모의 관측을 진행하세요." : detail;
+  $("instruction").textContent = actionFor(run);
+}
 function render(run, announce = true) {
   const previousAction = state.run?.status === "awaiting_user" ? state.run.instruction?.action_id : null;
   const currentAction = run.status === "awaiting_user" ? run.instruction?.action_id : null;
@@ -153,15 +169,11 @@ function render(run, announce = true) {
   const nextStatus = `${stateLabel} · 입력 출처: ${sourceText[run.source] || run.source || "확인 전"}`;
   // Repeated polls should not retrigger the screen reader's live region.
   if ($("status").textContent !== nextStatus) $("status").textContent = nextStatus;
-  const [phase, detail] = phaseFor(run);
-  $("phase").textContent = phase;
-  $("phase-detail").textContent = state.demo && run.source === "mock" && run.status === "awaiting_user"
-    ? "실물은 조작하지 말고, 안내를 확인한 뒤 완료 알림을 눌러 모의 관측을 진행하세요." : detail;
-  $("instruction").textContent = actionFor(run);
+  renderAction(run);
   $("verdict").textContent = verdictLabel(run);
   const items = Array.isArray(run.events) ? run.events : [];
   renderEvents(items);
-  const speech = freshSpeechItems(state.seen, run, claimableSuccess(run));
+  const speech = state.demoUnverified ? { ids: [], messages: [] } : freshSpeechItems(state.seen, run, claimableSuccess(run));
   speech.ids.forEach(id => state.seen.add(id));
   if (speech.messages.length) {
     state.lastSpoken = speech.messages.at(-1).message;
@@ -212,16 +224,29 @@ function renderDemo(info) {
     $("page-description").textContent = "사용자가 직접 인덕션을 조작합니다. 화면은 서버가 보고한 안내와 관측 결과를 보여줍니다.";
     $("observation-hint").textContent = "조작 완료 알림은 성공 판정이 아닙니다. 센서 관측과 서버 판정을 기다리세요.";
   }
+  if (state.run && state.connection === "online") renderAction(state.run);
   controls();
 }
 async function loadDemo() {
+  if (state.demoLoading) return;
+  state.demoLoading = true;
+  state.demoUnverified = true;
+  $("demo-controls").hidden = false;
+  $("demo-status").textContent = "실행 설정을 확인하는 중입니다. 확인 전에는 실물을 조작하지 마세요.";
+  if (!state.demo) {
+    $("demo-mode").textContent = "모델·입력 방식: 확인 전";
+    $("page-title").textContent = "실행 설정을 확인하세요";
+    $("page-description").textContent = "모델과 입력 방식을 확인한 뒤 실행할 수 있습니다. 확인 전에는 실물을 조작하지 마세요.";
+  }
+  if (state.run && state.connection === "online") renderAction(state.run);
+  controls();
   try { renderDemo(await api.demoInfo()); }
   catch {
-    if (state.demo) {
-      state.demoUnverified = true;
-      $("demo-status").textContent = "시연 설정을 확인하지 못했습니다. 다시 확인한 뒤 실행하세요.";
-      controls();
-    }
+    $("demo-controls").hidden = false;
+    $("demo-status").textContent = "시연 설정을 확인하지 못했습니다. 시연 설정 다시 확인을 누른 뒤 실행하세요.";
+  } finally {
+    state.demoLoading = false;
+    controls();
   }
 }
 $("demo-apply").addEventListener("click", () => {
@@ -229,7 +254,7 @@ $("demo-apply").addEventListener("click", () => {
   transact(async () => {
     try { renderDemo(await api.configureDemo($("demo-scenario").value)); }
     catch (error) {
-      state.demoUnverified = error.code === "connection" || error.code === "invalid_response";
+      state.demoUnverified = state.demoUnverified || error.code === "connection" || error.code === "invalid_response" || error.status >= 500;
       $("demo-scenario").value = state.demo.scenario;
       $("demo-status").textContent = `모의 입력 변경을 확인하지 못했습니다. 시연 설정 다시 확인을 누르세요. ${error.message}`;
     }
@@ -276,6 +301,7 @@ async function transact(task) {
 }
 $("goal-form").addEventListener("submit", event => {
   event.preventDefault();
+  if (state.demoUnverified) { showError("실행 설정을 확인한 뒤 시작하세요."); return; }
   if (state.run && !TERMINAL.has(state.run.status)) return;
   transact(async () => {
     const input = $("user-input").value.trim();
