@@ -107,6 +107,7 @@ class AgentOrchestrator:
         self.tools = tool_registry or default_tool_registry
         self.usage = UsageSummary()
         self.executed_tool_calls: list[dict[str, Any]] = []
+        self._action_baselines: dict[tuple, Observation | None] = {}
 
     def interpret_goal(
         self,
@@ -303,6 +304,11 @@ class AgentOrchestrator:
         if hasattr(self.adapter, "read_baseline"):
             baseline = self.adapter.read_baseline(goal.zone_id)
 
+        # Keep only this action's immutable pre-observation baseline. A later frame
+        # may become the next action's baseline, never this action's reference.
+        key = (run_id, action_id, goal.zone_id, window_start_ms, window_end_ms)
+        self._action_baselines = {key: baseline.model_copy(deep=True) if baseline else None}
+
         # 2. 터치 관측 결과 수집
         observations: list[Observation] = []
         if hasattr(self.adapter, "await_touch_result"):
@@ -398,7 +404,8 @@ class AgentOrchestrator:
                 timeout_ms=delayed_timeout_ms,
             )
 
-        baseline = self.adapter.read_baseline(goal.zone_id) if hasattr(self.adapter, "read_baseline") else None
+        key = (run_id, action_id, goal.zone_id, window_start_ms, window_end_ms)
+        baseline = self._action_baselines.pop(key, None)
         now_ms = getattr(getattr(self.adapter, "clock", None), "now_ms", window_end_ms)
         if now_ms < window_end_ms:
             now_ms = window_end_ms
