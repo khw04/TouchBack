@@ -1,9 +1,13 @@
 // Load the actual app entry point with a small DOM/transport double; no copied UI logic.
 let instance = 0;
-export async function loadApp(fetchImpl, search = '') {
+export async function loadApp(fetchImpl, search = '', {speechSupported = true} = {}) {
   const names = ['document','window','location','fetch','speechSynthesis','SpeechSynthesisUtterance','setInterval','clearInterval'];
   const previous = new Map(names.map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)]));
   const spoken = [];
+  const pollers = new Map();
+  let cancelled = 0;
+  const synth = {cancel(){cancelled++;},speak(value){spoken.push(value.text);}};
+  const Utterance = class { constructor(text){this.text=text;} };
   class Element {
     constructor(id = '') {
       Object.assign(this, {id,hidden:false,disabled:false,value:'',textContent:'',checked:false,children:[],listeners:new Map(),attributes:new Map()});
@@ -26,10 +30,9 @@ export async function loadApp(fetchImpl, search = '') {
   el('demo-controls').hidden = true;
   Object.assign(globalThis, {
     document:{getElementById:el,createElement:()=>new Element(),documentElement:{classList:{toggle(){return true;}}}},
-    window:{speechSynthesis:{}},location:{search},fetch:fetchImpl,
-    speechSynthesis:{cancel(){},speak(value){spoken.push(value.text);}},
-    SpeechSynthesisUtterance:class { constructor(text){this.text=text;} },
-    setInterval:()=>Symbol('poll'),clearInterval:()=>{},
+    window:speechSupported ? {speechSynthesis:synth,SpeechSynthesisUtterance:Utterance} : {},location:{search},fetch:fetchImpl,
+    speechSynthesis:synth, SpeechSynthesisUtterance:Utterance,
+    setInterval:callback=>{const id=Symbol('poll');pollers.set(id,callback);return id;},clearInterval:id=>pollers.delete(id),
   });
   try {
     await import(`../../frontend/app.mjs?app-test=${++instance}`);
@@ -43,7 +46,7 @@ export async function loadApp(fetchImpl, search = '') {
       else delete globalThis[name];
     }
   }
-  return {el,spoken,close:restore};
+  return {el,spoken,cancelCount:()=>cancelled,poll:async()=>{for(const callback of [...pollers.values()])await callback();await flush();},close:restore};
 }
 export async function flush() {
   for(let i=0;i<3;i++) await new Promise(resolve=>setImmediate(resolve));
