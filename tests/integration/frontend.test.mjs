@@ -516,3 +516,158 @@ test("metadata retry cannot unmask a run whose server snapshot is unverified", a
     assert.equal(app.el('ack').disabled,true);
   } finally {app.close();}
 });
+
+test("actual app speech harness exercises both supported and unsupported browsers", async () => {
+  const {loadApp,ok,demoMetadata,activeRun}=await import('./app-harness.mjs');
+  for(const speechSupported of [true,false]){
+    const app=await loadApp(async url=>ok(url==='/api/demo'?demoMetadata:activeRun),'',{speechSupported});
+    try {
+      await app.el('goal-form').fire('submit');
+      assert.equal(app.el('auto-speech').disabled,speechSupported?false:true);
+      assert.deepEqual(app.spoken,speechSupported?[activeRun.instruction.text]:[]);
+    } finally {app.close();}
+  }
+});
+
+for(const ending of ['stopped','succeeded','unknown'])test(`cancel intent suppresses recovery and terminal speech before ${ending} response`, async () => {
+  const {loadApp,ok,demoMetadata,activeRun,flush}=await import('./app-harness.mjs');
+  let releaseStep,releaseCancel,rejectCancel,ack=false,confirmed=false;
+  const step=new Promise(resolve=>{releaseStep=resolve;});
+  const cancel=new Promise((resolve,reject)=>{releaseCancel=resolve;rejectCancel=reject;});
+  const retryText='오른쪽 화구의 + 버튼을 다시 한 번 눌러 주세요.';
+  const recovery={...activeRun,instruction:{action_id:'act-2',text:retryText},events:[...activeRun.events,
+    {event_id:'evt-2',run_id:'run-test',action_id:'act-2',kind:'recovery',timestamp:'2026-10-18T00:00:01Z',source:'mock',message:retryText,evidence_ids:[]}]};
+  const terminal={...activeRun,status:ending==='succeeded'?'succeeded':'stopped',instruction:null,
+    verdict:ending==='succeeded'?{status:'success',verification_level:'exact_step',goal_satisfied:true,reason_codes:['requested_step_verified'],evidence_ids:['mock-evidence']}:null};
+  const app=await loadApp(async(url,options)=>{
+    if(url==='/api/demo')return ok(demoMetadata);
+    if(url.endsWith('/ack')){ack=true;return ok({run_id:'run-test',status:'observing',accepted:true});}
+    if(url.endsWith('/step'))return step;
+    if(url.endsWith('/cancel'))return cancel;
+    return ok(confirmed?terminal:ack?{...activeRun,status:'observing'}:activeRun);
+  });
+  let cancellation;
+  try {
+    await app.el('goal-form').fire('submit');await app.el('ack').fire('click');
+    const before=app.spoken.length,cancelCount=app.cancelCount();
+    cancellation=app.el('cancel').fire('click');await flush();
+    assert.ok(app.cancelCount()>cancelCount);
+    assert.doesNotMatch(app.el('instruction').textContent,/\+ 버튼/);
+    releaseStep(ok(recovery));await flush();
+    assert.doesNotMatch(app.el('instruction').textContent,/\+ 버튼/);
+    assert.equal(app.el('ack').disabled,true);assert.equal(app.el('repeat').disabled,true);
+    assert.deepEqual(app.spoken.slice(before),[]);
+    if(ending==='unknown'){
+      rejectCancel(new Error('cancel response lost'));await cancellation;
+      await app.el('retry').fire('click');
+      assert.doesNotMatch(app.el('instruction').textContent,/\+ 버튼/);
+      assert.equal(app.el('ack').disabled,true);assert.equal(app.el('repeat').disabled,true);
+    }else{
+      confirmed=true;releaseCancel(ok({run_id:'run-test',status:ending}));await cancellation;
+      assert.match(app.el('status').textContent,ending==='stopped'?/실행 중단/:/목표 확인/);
+      assert.deepEqual(app.spoken.slice(before),[]);
+      assert.equal(app.el('start').disabled,false);
+    }
+  } finally {
+    releaseStep(ok(recovery));confirmed=true;releaseCancel(ok({run_id:'run-test',status:'stopped'}));
+    if(cancellation)await cancellation;app.close();
+  }
+});
+
+test("manual confirmed lookup retries a lost step once with the same action", async () => {
+  const {loadApp,ok,demoMetadata,activeRun}=await import('./app-harness.mjs');
+  let ack=false,steps=[];
+  const terminal={...activeRun,status:'uncertain',instruction:null,verdict:{status:'uncertain',verification_level:'none',goal_satisfied:null,reason_codes:['synthetic-check'],evidence_ids:[]}};
+  let finished=false;
+  const app=await loadApp(async(url,options)=>{
+    if(url==='/api/demo')return ok(demoMetadata);
+    if(url.endsWith('/ack')){ack=true;return ok({run_id:'run-test',status:'observing',accepted:true});}
+    if(url.endsWith('/step')){
+      steps.push(JSON.parse(options.body));if(steps.length===1)throw new Error('request lost before server');
+      finished=true;return ok(terminal);
+    }
+    return ok(finished?terminal:ack?{...activeRun,status:'observing'}:activeRun);
+  });
+  try {
+    await app.el('goal-form').fire('submit');await app.el('ack').fire('click');
+    assert.equal(steps.length,1);
+    await app.el('retry').fire('click');
+    assert.deepEqual(steps,[{action_id:'act-1'},{action_id:'act-1'}]);
+    assert.match(app.el('status').textContent,/불확실/);
+    await app.el('retry').fire('click');assert.equal(steps.length,2);
+  } finally {app.close();}
+});
+
+test("polls do not duplicate an inflight step or automatically repeat failed POSTs", async () => {
+  const {loadApp,ok,demoMetadata,activeRun}=await import('./app-harness.mjs');
+  let ack=false,steps=0;
+  const app=await loadApp(async(url,options)=>{
+    if(url==='/api/demo')return ok(demoMetadata);
+    if(url.endsWith('/ack')){ack=true;return ok({run_id:'run-test',status:'observing',accepted:true});}
+    if(url.endsWith('/step')){steps++;throw new Error('offline');}
+    return ok(ack?{...activeRun,status:'observing'}:activeRun);
+  });
+  try {
+    await app.el('goal-form').fire('submit');await app.el('ack').fire('click');
+    for(let i=0;i<3;i++)await app.el('retry').fire('click');
+    assert.equal(steps,2);
+    assert.match(app.el('error').textContent,/한도|재시도/);
+  } finally {app.close();}
+});
+
+test("automatic polls and manual lookup cannot duplicate a pending observation POST", async () => {
+  const {loadApp,ok,demoMetadata,activeRun}=await import('./app-harness.mjs');
+  let ack=false,steps=0,release;
+  const pending=new Promise(resolve=>{release=resolve;});
+  const terminal={...activeRun,status:'uncertain',instruction:null,verdict:{status:'uncertain',verification_level:'none',goal_satisfied:null,reason_codes:['synthetic-check'],evidence_ids:[]}};
+  const app=await loadApp(async(url,options)=>{
+    if(url==='/api/demo')return ok(demoMetadata);
+    if(url.endsWith('/ack')){ack=true;return ok({run_id:'run-test',status:'observing',accepted:true});}
+    if(url.endsWith('/step')){steps++;return pending;}
+    return ok(ack?{...activeRun,status:'observing'}:activeRun);
+  });
+  try {
+    await app.el('goal-form').fire('submit');await app.el('ack').fire('click');
+    for(let i=0;i<3;i++)await app.poll();
+    await app.el('retry').fire('click');assert.equal(steps,1);
+    release(ok(terminal));
+  } finally {release(ok(terminal));await (await import('./app-harness.mjs')).flush();app.close();}
+});
+
+test("automatic polls after failed delivery do not silently resend an observation", async () => {
+  const {loadApp,ok,demoMetadata,activeRun}=await import('./app-harness.mjs');
+  let ack=false,steps=0;
+  const app=await loadApp(async(url,options)=>{
+    if(url==='/api/demo')return ok(demoMetadata);
+    if(url.endsWith('/ack')){ack=true;return ok({run_id:'run-test',status:'observing',accepted:true});}
+    if(url.endsWith('/step')){steps++;throw new Error('request never reached server');}
+    return ok(ack?{...activeRun,status:'observing'}:activeRun);
+  });
+  try {
+    await app.el('goal-form').fire('submit');await app.el('ack').fire('click');
+    for(let i=0;i<3;i++)await app.poll();assert.equal(steps,1);
+    assert.equal(app.el('error').hidden,false);assert.match(app.el('error').textContent,/상태 다시 확인/);
+    await app.el('retry').fire('click');assert.equal(steps,2);
+    for(let i=0;i<3;i++)await app.poll();assert.equal(steps,2);
+  } finally {app.close();}
+});
+
+test("a new goal after cancellation can speak its own instruction", async () => {
+  const {loadApp,ok,demoMetadata,activeRun}=await import('./app-harness.mjs');
+  let created=0,cancelled=false;
+  const next={...activeRun,run_id:'run-next',instruction:{action_id:'act-next',text:'왼쪽 화구의 + 버튼을 한 번 눌러 주세요.'},events:[]};
+  const app=await loadApp(async(url,options)=>{
+    if(url==='/api/demo')return ok(demoMetadata);
+    if(url==='/api/runs'&&options.method==='POST')return ok(++created===1?activeRun:next);
+    if(url.endsWith('/cancel')){cancelled=true;return ok({run_id:'run-test',status:'stopped'});}
+    return ok(url.includes('run-next')?next:cancelled?{...activeRun,status:'stopped',instruction:null}:activeRun);
+  });
+  try {
+    await app.el('goal-form').fire('submit');await app.el('cancel').fire('click');
+    const before=app.spoken.length;
+    app.el('user-input').value='왼쪽 화력 올려줘';app.el('zone').value='left';
+    await app.el('goal-form').fire('submit');
+    assert.deepEqual(app.spoken.slice(before),[next.instruction.text]);
+    assert.equal(app.el('ack').disabled,false);assert.equal(app.el('repeat').disabled,false);
+  } finally {app.close();}
+});
