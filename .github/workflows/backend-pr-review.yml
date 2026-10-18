@@ -1,0 +1,74 @@
+name: Backend PR review 2026-10-18
+
+on:
+  push:
+    branches:
+      - chore/backend-pr-review-20261018
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: Backend PR ${{ matrix.pr }}
+    runs-on: windows-latest
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - pr: 17
+            ref: baa0b17e41027623655f45ccac0d61aeffcf9d65
+          - pr: 18
+            ref: f438dad4492eb961bc7751a419a9c7a856561b7b
+          - pr: 20
+            ref: 89fef253cc7ef3c3530eb0cb70d0c8d1f964c2d2
+          - pr: 21
+            ref: 8b06ff69cf06f9241badfc06453846dfb1ef3852
+          - pr: 22
+            ref: cc12eafe6f0042ad39bec1700dac956b9b148f4a
+    env:
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: utf-8
+      OPENAI_API_KEY: ""
+      TOUCHBACK_EXECUTION_MODE: backend_stub
+      TOUCHBACK_DEMO_ENABLED: "false"
+      TOUCHBACK_MOCK_SCENARIO: normal
+    steps:
+      - name: Check out exact reviewed commit
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ matrix.ref }}
+          path: source
+          persist-credentials: false
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: source/backend/requirements-dev.txt
+      - name: Record tested commit and runtime
+        working-directory: source
+        run: |
+          git rev-parse HEAD
+          python --version
+      - name: Install pinned test dependencies
+        working-directory: source
+        run: python -m pip install --disable-pip-version-check -r backend/requirements-dev.txt
+      - name: Run complete backend test suite
+        id: pytest
+        working-directory: source/backend
+        run: python -m pytest -q --junitxml=../backend-results.xml
+      - name: Compile backend modules
+        if: ${{ !cancelled() && steps.pytest.outcome != 'skipped' }}
+        working-directory: source
+        run: python -m compileall -q backend/app
+      - name: Preserve backend test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-pr-${{ matrix.pr }}
+          path: source/backend-results.xml
+          if-no-files-found: warn
+          retention-days: 7
