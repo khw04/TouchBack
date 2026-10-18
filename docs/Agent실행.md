@@ -51,3 +51,9 @@ Mock 센서로 정상(Success), 변화 없음 후 제한된 복구(Recovery), �
 검증 결과: 신규 71개를 포함한 backend pytest 350개, 프런트 node --test 29개, git diff --check 통과. 로컬 .venv 실행기가 참조하는 Python 경로를 사용할 수 없어 설치된 Python 3.13.5와 기존 .venv 의존성으로 검증했다. 실제 OpenAI 호출·과금/사용량 대시보드·실물 센서·브라우저 TTS는 미검증이다.
 
 응답 형식 근거: [OpenAI Chat Completions 공식 문서](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create).
+
+## 2026-10-18 추가 검토 수정: 보정 사전 검사와 지연 판정
+
+- registry의 사전 점검과 최종 Verifier는 observation_calibration_errors를 공유한다. 보정 ID·기종/세션·화구·출처·단위/방법/샘플링·표본수와 기준 RMS 범위를 확인하며, 최초/복구 안내 전 해당 프로필과 다른 관측을 차단한다. 프로필은 여전히 Mock 전용이며 live/replay를 검증 완료로 올리지 않는다.
+- 관측 수집 직전 기준선을 run/action/화구/시간창에 묶어 복사한다. 변화 없음 뒤 지연 관측이 도착하면 이 원래 기준선으로 검증한다. 재시도용으로 새로 읽은 기준선과 혼용하지 않으며 늦은 관측의 품질·시계·시간창·보정·정확 단계 검사는 유지한다. 최종 verdict 이벤트는 최종 판정의 evidence_ids를 가리킨다.
+- API 회귀 30개: 좌/우 정상과 잘못된 보정 ID/단위/RMS/표본/방법/샘플링, 모델 대기 중 변경된 재시도 기준선, 변화 없음→지연 exact_step/출력 증가만/다른 단계/품질 불량/시간창 밖을 검사했다. 이 브랜치 backend 전체 388개 통과. 외부 모델/실물 검증은 아니다.

@@ -1,6 +1,9 @@
 """Standard tool registry initialization with default sensor tools."""
 from typing import Any
 from app.tools.base import ToolRegistry
+from app.agent.verifier import default_verifier
+from app.verification.models import MockCalibration
+from app.verification.verifier import observation_calibration_errors
 from app.tools.sensor_tools import (
     AwaitTouchResultTool,
     CheckSensorIntegrityTool,
@@ -48,6 +51,7 @@ def create_registry_from_adapter(
     run_id: str | None = None,
     zone_id: str | None = None,
     for_planning: bool = False,
+    calibration: MockCalibration | None = None,
 ) -> ToolRegistry:
     """주어진 관측 어댑터(MockAdapter 또는 MockSensorAdapter)와 연동된 ToolRegistry를 생성합니다.
 
@@ -76,7 +80,9 @@ def create_registry_from_adapter(
             obs = adapter.read_baseline(zid)
             if obs and obs.device_observation:
                 device = obs.device_observation
-                reasons = list(device.quality.reasons)
+                profile = calibration or default_verifier.get_calibration_for_zone(zid)
+                calibration_errors = observation_calibration_errors(obs, profile, zid, baseline=True)
+                reasons = list(device.quality.reasons) + calibration_errors
                 if device.field_summary is None:
                     reasons.append("missing_field_summary")
                 if device.zone_id != zid or device.source != source:
@@ -92,7 +98,7 @@ def create_registry_from_adapter(
                     "quality": device.quality.status,
                     "reasons": reasons,
                     "clock_sync": "verified" if obs.clock_quality == "verified" else "unsynced",
-                    "calibrated": bool(device.calibration_id) and not any("calibrat" in r for r in reasons),
+                    "calibrated": not calibration_errors and bool(device.calibration_id),
                     "saturation": any("saturat" in r for r in reasons),
                     "beep_count": device.beep_count or 0,
                     "source": source,

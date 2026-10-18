@@ -9,6 +9,43 @@ def verdict(status: str, level: str, satisfied: bool | None, reasons: list[str],
                    reason_codes=list(dict.fromkeys(reasons)), evidence_ids=list(dict.fromkeys(evidence)))
 
 
+def observation_calibration_errors(
+    item: Observation, calibration: MockCalibration | None, zone_id: str, *, baseline: bool = False,
+) -> list[str]:
+    """Shared measurement/profile checks for preflight and final verification."""
+    if calibration is None:
+        return ["calibration_missing"]
+    try:
+        item = Observation.model_validate_json(item.model_dump_json())
+        calibration = MockCalibration.model_validate_json(calibration.model_dump_json())
+    except (ValueError, TypeError, AttributeError):
+        return ["invalid_input"]
+    reasons = []
+    device = item.device_observation
+    field = device.field_summary
+    if calibration.zone_id != zone_id:
+        reasons.append("calibration_scope_mismatch")
+    if device.source != calibration.source:
+        reasons.append("source_mismatch")
+    if (device.device_id, device.session_id) != (calibration.device_id, calibration.session_id):
+        reasons.append("device_session_mismatch")
+    if device.zone_id != zone_id:
+        reasons.append("zone_mismatch")
+    if device.calibration_id != calibration.calibration_id:
+        reasons.append("calibration_mismatch")
+    start, end = item.mapped_window_start_ms, item.mapped_window_end_ms
+    if field is None:
+        reasons.append("field_missing")
+    else:
+        if start is not None and end is not None and field.sample_count < (end - start) * field.sample_rate_hz / 1000:
+            reasons.append("insufficient_samples")
+        if (field.unit, field.method, field.sample_rate_hz) != (calibration.unit, calibration.method, calibration.sample_rate_hz):
+            reasons.append("measurement_settings_mismatch")
+        if baseline and not calibration.baseline_rms_min <= field.rms <= calibration.baseline_rms_max:
+            reasons.append("baseline_outside_calibration")
+    return reasons
+
+
 def verify_intent(
     goal: Goal, baseline: Observation | None, observations: list[Observation],
     context: ActionContext, calibration: MockCalibration | None,
@@ -51,15 +88,7 @@ def verify_intent(
     for item in [baseline, *unique]:
         evidence.append(item.observation_id)
         d = item.device_observation
-        f = d.field_summary
-        if d.source != calibration.source:
-            reasons.append("source_mismatch")
-        if (d.device_id, d.session_id) != (calibration.device_id, calibration.session_id):
-            reasons.append("device_session_mismatch")
-        if d.zone_id != goal.zone_id:
-            reasons.append("zone_mismatch")
-        if d.calibration_id != calibration.calibration_id:
-            reasons.append("calibration_mismatch")
+        reasons.extend(observation_calibration_errors(item, calibration, goal.zone_id, baseline=item is baseline))
         if d.quality.status != "valid" or d.quality.reasons:
             reasons.append("sensor_quality_invalid")
         if item.clock_quality != "verified":
@@ -84,12 +113,6 @@ def verify_intent(
                     reasons.append("observation_stale")
                 if end - start < calibration.min_observation_ms:
                     reasons.append("observation_window_too_short")
-        if f is None:
-            reasons.append("field_missing")
-        elif start is not None and end is not None and f.sample_count < (end - start) * f.sample_rate_hz / 1000:
-            reasons.append("insufficient_samples")
-        if f is not None and (f.unit, f.method, f.sample_rate_hz) != (calibration.unit, calibration.method, calibration.sample_rate_hz):
-            reasons.append("measurement_settings_mismatch")
 
     base = baseline.device_observation
     last_seq = base.seq
@@ -99,8 +122,6 @@ def verify_intent(
         if item.device_observation.seq <= last_seq:
             reasons.append("sequence_regressed")
         last_seq = item.device_observation.seq
-    if base.field_summary is not None and not calibration.baseline_rms_min <= base.field_summary.rms <= calibration.baseline_rms_max:
-        reasons.append("baseline_outside_calibration")
     if reasons:
         return verdict("uncertain", "none", None, reasons, evidence)
 

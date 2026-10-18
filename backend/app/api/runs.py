@@ -706,6 +706,7 @@ class RunStore:
                     registry = create_registry_from_adapter(
                         orch.adapter, source=state.source, run_id=run_id,
                         zone_id=goal.zone_id, for_planning=True,
+                        calibration=orch.verifier.get_calibration_for_zone(goal.zone_id),
                     )
                     recovery_checks = await required_preflight(registry, goal.zone_id)
                     if any(not call["result"]["success"] for call in recovery_checks):
@@ -866,7 +867,7 @@ class RunStore:
                 kind="verdict",
                 action_id=action_id,
                 message=feedback,
-                evidence_ids=verdict.evidence_ids,
+                evidence_ids=current_state.verdict.evidence_ids,
             )
 
             if next_status in TERMINAL_STATUSES and self._active_run_id == run_id:
