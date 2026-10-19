@@ -1,3 +1,5 @@
+import './reset-recovery-cases.mjs';
+import './terminal-summary-cases.mjs';
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createApi, ApiError, freshSpeechItems, validateRun } from "../../frontend/api.mjs";

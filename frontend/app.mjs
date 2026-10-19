@@ -25,6 +25,7 @@ state.demoInfo = null;
 state.demoUnverified = !fixtureMode;
 state.demoLoading = false;
 state.recoverRunId = null;
+state.resetUnverified = false;
 state.correctionDraft=null;
 state.returnGoal=null;
 state.correctionRunId=null;
@@ -408,7 +409,15 @@ async function loadDemo() {
   }
   if (state.run && state.connection === "online") renderAction(state.run);
   controls();
-  try { renderDemo(await api.demoInfo()); }
+  try {
+    const info=await api.demoInfo();
+    renderDemo(info);
+    // Only reconcile uncertainty created by reset, with a confirmed idle device.
+    // General settings metadata cannot establish an ack/press/cancel result.
+    if(state.resetUnverified && info.enabled===true && info.virtual_cooktop===true &&
+       info.active_run_id===null && info.virtual_levels &&
+       (!state.run || TERMINAL.has(state.run.status))) finishResetView(info,true);
+  }
   catch {
     $("demo-controls").hidden = false;
     $("settings-panel").open = true;
@@ -712,11 +721,8 @@ $("return-goal").addEventListener("click",()=>{
   $("status").textContent="원래 목표를 확인한 뒤 안내 시작을 누르세요. 자동으로 조작하거나 시작하지 않습니다.";
   $("user-input").focus();controls();
 });
-$("reset-device").addEventListener("click",()=>{
-  if($("reset-device").disabled)return;
-  transact(async()=>{
-    let info;
-    try {info=await api.resetDevice();}catch(error){registerBusy(error);state.demoUnverified=true;markUnverified("초기화 결과를 확인하지 못했습니다. 시연 설정 다시 확인으로 장치 상태를 확인하세요.");return;}
+function finishResetView(info,reconciled=false) {
+    state.resetUnverified=false;
     reads.invalidate();stopPolling();observationRequests.clear();
     state.run=null;state.runId=null;state.cancelRequestedRunId=null;state.submittedRequest=null;
     state.connection="online";state.lastConfirmedAt=Date.now();
@@ -724,13 +730,26 @@ $("reset-device").addEventListener("click",()=>{
     if(speechAvailable)speechSynthesis.cancel();
     paintFlow(signalFlow.reset());renderEvents([]);renderDemo(info);
     for(const name of ["beep","field","delta","left","right"])$("signal-"+name).textContent="—";
-    $("signal-quality").textContent="확인 전";$("signal-note").textContent="초기화 후 새 관측을 기다립니다.";$("field-meter").hidden=true;
-    $("instruction").textContent="가상 화력을 5/5로 초기화했습니다. 새 목표를 입력하세요.";$("phase").textContent="새 요청 대기";
-    $("phase-detail").textContent="실물 상태를 초기화한 것이 아닙니다.";$("status").textContent="가상 장치 초기화 완료";
-    $("agent-trail").replaceChildren();$("result-summary").textContent="초기화 후 아직 판정이 없습니다.";
+    $("signal-quality").textContent="확인 전";$("signal-note").textContent="새 관측을 기다립니다.";$("field-meter").hidden=true;
+    $("instruction").textContent=reconciled?"장치 상태를 다시 확인했습니다. 표시된 화력을 확인하고 새 목표를 입력하세요.":"가상 화력을 5/5로 초기화했습니다. 새 목표를 입력하세요.";$("phase").textContent="새 요청 대기";
+    $("phase-detail").textContent="실물 상태를 초기화한 것이 아닙니다.";$("status").textContent=reconciled?"가상 장치 상태 재확인 완료":"가상 장치 초기화 완료";
+    $("agent-trail").replaceChildren();$("result-summary").textContent="새 실행의 판정을 기다립니다.";
     $("agent-stage").textContent="요청 대기";$("sensor-stage").textContent="관측 대기";$("agent-stage-detail").textContent="새 목표와 관측을 기다립니다.";
     $("evidence-preview").hidden=true;$("evidence-json").textContent="";$("export-note").textContent="";
     $("run-id").textContent="실행 ID: 없음";$("verdict").textContent="새 실행의 판정을 기다립니다.";
+    clearError();showConnection();
+}
+$("reset-device").addEventListener("click",()=>{
+  if($("reset-device").disabled)return;
+  transact(async()=>{
+    const resetOnly=!state.startUnknown && !["offline","invalid","unverified"].includes(state.connection);
+    let info;
+    try {info=await api.resetDevice();}
+    catch(error){
+      registerBusy(error);state.resetUnverified=resetOnly;state.demoUnverified=true;
+      markUnverified("초기화 결과를 확인하지 못했습니다. 시연 설정 다시 확인으로 장치 상태를 확인하세요.");return;
+    }
+    finishResetView(info);
   });
 });
 $("repeat").addEventListener("click", () => speak(state.lastSpoken));
