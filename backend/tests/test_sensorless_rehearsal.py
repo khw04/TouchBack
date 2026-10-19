@@ -28,8 +28,8 @@ def test_all_scenarios_repeat_through_actual_routes(client, zone):
     cases = []
     report = run_rehearsal(client, scenarios=SCENARIOS, repeat=2, zone=zone, on_case=cases.append)
     assert report['status'] == 'passed' and report['settings_restored'] is True
-    assert len(cases) == 16 and cases == report['cases']
-    assert len({case['run_id'] for case in cases}) == 16
+    assert len(cases) == 2*len(SCENARIOS) and cases == report['cases']
+    assert len({case['run_id'] for case in cases}) == 2*len(SCENARIOS)
     for case in cases:
         assert case['outcome'] == 'matched' and case['cleanup_confirmed']
         assert case['snapshot']['source'] == 'mock'

@@ -133,7 +133,7 @@ def verify_intent(
         delta = field.rms - base.field_summary.rms
         band = next((band for band in calibration.step_bands if band.delta_min <= delta <= band.delta_max), None)
         if band is not None:
-            satisfied = band.steps == goal.requested_steps
+            satisfied = band.steps == goal.requested_steps*(1 if goal.direction=="increase" else -1)
             outcomes.append(("success" if satisfied else "mismatch", "exact_step", satisfied,
                              "requested_step_verified" if satisfied else "different_step_verified"))
         elif abs(delta) <= calibration.no_change_tolerance:

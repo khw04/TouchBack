@@ -4,8 +4,8 @@ from app.adapters.mock import MockAdapter, ScheduledObservation, VirtualClock
 from app.adapters.mock_setup import build_mock_adapter
 from app.contracts.models import DeviceObservation, FieldSummary, Quality, Zone
 
-DemoScenario = Literal["normal", "recovery", "sensor_error", "missing", "delayed", "no_change", "duplicate", "recovery_exhausted"]
-SCENARIOS = ("normal", "recovery", "sensor_error", "missing", "delayed", "no_change", "duplicate", "recovery_exhausted")
+DemoScenario = Literal["normal", "recovery", "sensor_error", "missing", "delayed", "no_change", "duplicate", "recovery_exhausted", "double_input"]
+SCENARIOS = ("normal", "recovery", "sensor_error", "missing", "delayed", "no_change", "duplicate", "recovery_exhausted", "double_input")
 
 
 def build_demo_adapter(scenario: DemoScenario, *, zone_id: Zone = "right") -> MockAdapter:

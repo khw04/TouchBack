@@ -4,7 +4,7 @@ export function signalsFor(run) {
   const empty={beep:"—",field:"—",delta:"—",quality:"확인 전",rms:null,note:"수집된 모의 관측이 없습니다.",key:""};
   if(!sim || !sim.last_press) return empty;
   const actionId=sim.last_press.action_id;
-  const items=sim.observations.filter(item=>item.action_id===actionId);
+  const items=sim.observations.filter(item=>item.action_id===actionId && (!sim.target_zone || item.device_observation.zone_id===sim.target_zone));
   if(!items.length)return {...empty,note:run.status==="observing"?"모의 센서 신호를 수집하고 있습니다.":"해당 조작의 관측이 도착하지 않았습니다."};
   const last=items.at(-1),device=last.device_observation,field=device.field_summary;
   const base=sim.baselines?.[actionId]?.device_observation?.field_summary;
@@ -39,7 +39,7 @@ export function createSignalFlow() {
     const sim=run.simulation,actionId=sim?.last_press?.action_id;
     // Only the current press's consumed Mock observations may travel to Agent.
     const items=run.source==="mock" && sim?.kind==="virtual_cooktop" && actionId
-      ?sim.observations.filter(item=>item.run_id===run.run_id && item.action_id===actionId && item.device_observation.source==="mock"):[];
+      ?sim.observations.filter(item=>item.run_id===run.run_id && item.action_id===actionId && item.device_observation.source==="mock" && (!sim.target_zone || item.device_observation.zone_id===sim.target_zone)):[];
     const ids=items.map(item=>JSON.stringify([item.action_id,item.observation_id]));
     const fresh=ids.some(id=>!seen.has(id));ids.forEach(id=>seen.add(id));
     if(["stopped","failed"].includes(run.status)) {

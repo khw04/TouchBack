@@ -89,7 +89,7 @@ class Observation(Contract):
 
 class Goal(Contract):
     zone_id: Zone
-    direction: Literal["increase"]
+    direction: Literal["increase", "decrease"]
     requested_steps: Annotated[int, Field(ge=1, le=1)]
 
 
@@ -145,6 +145,7 @@ class RunResponse(CreateRunResponse):
     instruction: Instruction | None
     verdict: Verdict | None
     events: list[RunEvent]
+    diagnosis: dict | None = None
     simulation: dict | None = None  # Operator-only; never a goal or Agent tool input.
 
 
