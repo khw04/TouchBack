@@ -481,7 +481,7 @@ class RunStore:
                         message=f"도구 '{tool_name}' 실행 실패: {err_text}",
                         action_id=action_id,
                     )
-                    if tool_name in ("check_sensor_integrity", "read_field"):
+                    if tc.get("origin") == "required_preflight" or tool_name in ("check_sensor_integrity", "read_field", "state_resynchronization", "check_supported_change"):
                         sensor_fault_detected = True
                         sensor_fault_reason = err_text
 
