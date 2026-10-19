@@ -760,3 +760,7 @@ footer{
 
 .fault-panel{position:relative}.fault-panel>summary{cursor:pointer;list-style:none;background:white;border:1px solid var(--line);border-radius:8px;padding:10px;font-size:.78rem;white-space:nowrap}.fault-panel summary span{font-weight:700}.fault-options{position:absolute;top:48px;right:0;width:300px;max-width:calc(100vw - 28px);z-index:25;background:white;border:1px solid var(--line);box-shadow:0 12px 40px #183b2526;border-radius:10px;padding:14px}.fault-options .quick-scenario{display:grid;white-space:normal;gap:8px}.fault-options select{width:100%}.fault-options .hint{font-size:.75rem}.correction-actions:empty{display:none}.correction-actions button{font-size:.8rem;min-height:36px;padding:8px 10px}
 @media(max-width:650px){.fault-options{right:auto;left:0}.fault-panel{flex:1}.fault-panel summary{text-align:center}}
+
+.voice-note{font-size:.68rem;color:var(--muted)}
+
+@media(min-width:1100px) and (max-height:740px){.agent-trail li{-webkit-line-clamp:1}}

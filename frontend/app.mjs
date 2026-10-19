@@ -1,3 +1,4 @@
+import { createVoiceInput } from "./voice.mjs?v=24";
 import { signalsFor, trailFor, createSignalFlow } from "./signals.mjs?v=23";
 import { screenSummary } from "./screen.mjs?v=23";
 import { demoLabel, demoControlsDisabled } from "./demo.mjs?v=23";
@@ -27,6 +28,14 @@ state.recoverRunId = null;
 state.correctionDraft=null;
 state.returnGoal=null;
 state.correctionRunId=null;
+state.voiceListening=false;
+const Recognition=window.SpeechRecognition || window.webkitSpeechRecognition;
+const voice=createVoiceInput({factory:Recognition?()=>new Recognition():null,
+  canEdit:()=>!state.busy && !state.startUnknown && !state.recoverRunId && !state.demoUnverified && !["offline","invalid","unverified"].includes(state.connection) && (!state.run || TERMINAL.has(state.run.status)),
+  onDraft:text=>{$("user-input").value=text;$("user-input").focus();},
+  onStatus:text=>{$("status").textContent=text;},
+  onBusy:busy=>{state.voiceListening=busy;controls();}});
+$("voice-note").textContent=voice.supported?"인식 문장 확인 후 실행":"이 브라우저는 음성 입력 미지원";
 const reads = createReadGate(() => state.runId);
 const signalFlow=createSignalFlow();
 // Capture nodes so a finishing animation never depends on a later global page.
@@ -71,7 +80,11 @@ function controls() {
   $("apply-correction").disabled=state.busy;
   $("return-goal").hidden=!confirmed || run.status!=="succeeded" || state.correctionRunId!==run.run_id || !state.returnGoal;
   $("return-goal").disabled=state.busy;
+  $("correction-actions").hidden=$("apply-correction").hidden && $("return-goal").hidden;
   $("reset-device").disabled=!state.demo || !state.demo.virtual_cooktop || demoControlsDisabled(state) || state.demoUnverified;
+  if(state.voiceListening && (cannotEdit || state.demoUnverified || ["offline","invalid","unverified"].includes(state.connection)))voice.stop(false);
+  $("voice-input").disabled=!voice.supported || cannotEdit || state.demoUnverified || ["offline","invalid","unverified"].includes(state.connection);
+  $("voice-input").textContent=state.voiceListening?"음성 입력 중단":"음성 입력";
   $("recover-run").hidden = !state.recoverRunId;
   $("recover-run").disabled = state.busy || state.demoLoading;
   $("cancel").textContent = run?.status === "awaiting_clarification" ? "입력 수정하기" : "실행 취소";
@@ -88,7 +101,7 @@ function controls() {
     $("virtual-"+zone+"-"+operation).disabled = !virtual || !run?.simulation || state.busy || cancellingCurrentRun() || state.demoUnverified || state.connection !== "online" || run.status !== "awaiting_user";
   }
   const writable = canSendAction(fixtureMode ? "fixture" : "server", state.connection);
-  $("start").disabled = Boolean(state.recoverRunId) || Boolean(state.demoInfo?.manageable && (!state.demo || !state.demo.virtual_cooktop || state.demoInfo.execution_mode === "real_llm" && state.demoInfo.api_key_configured === false)) || state.busy || state.startUnknown || state.demoUnverified || ["offline", "invalid", "unverified"].includes(state.connection) || Boolean(run && !TERMINAL.has(run.status));
+  $("start").disabled = state.voiceListening || Boolean(state.recoverRunId) || Boolean(state.demoInfo?.manageable && (!state.demo || !state.demo.virtual_cooktop || state.demoInfo.execution_mode === "real_llm" && state.demoInfo.api_key_configured === false)) || state.busy || state.startUnknown || state.demoUnverified || ["offline", "invalid", "unverified"].includes(state.connection) || Boolean(run && !TERMINAL.has(run.status));
   $("ack").disabled = state.busy || cancellingCurrentRun() || state.demoUnverified || !writable || !run?.instruction?.action_id || run.status !== "awaiting_user";
   $("cancel").disabled = state.busy || !writable || !run || TERMINAL.has(run.status);
   $("retry").disabled = state.busy || !state.runId || fixtureMode;
@@ -245,6 +258,7 @@ function renderAction(run) {
   $("instruction").textContent = actionFor(run);
   if (state.demo && run.source === "mock" && TERMINAL.has(run.status)) {
     $("instruction").textContent = screenSummary(run).result;
+    if(run.status==="uncertain" && ["other_zone_changed","multiple_zones_changed","opposite_direction","different_step_change"].includes(run.diagnosis?.code))$("phase").textContent="결과 · 목표와 다른 변화";
     $("phase-detail").textContent = run.diagnosis?.next_action || "모의 입력 시연의 실행 결과입니다. 실제 인덕션 성능을 검증한 결과는 아닙니다.";
   }
 }
@@ -266,7 +280,8 @@ function render(run, announce = true) {
   $("run-id").textContent = `실행 ID: ${run.run_id || "없음"}`;
   $("fixture-active").hidden = !isFixture || !run.scenario;
   if (isFixture && run.scenario) $("fixture-active").textContent = `화면 연습: ${fixtureScenarioText[run.scenario] || run.scenario}`;
-  const stateLabel = run.status === "succeeded" && !claimableSuccess(run) ? "서버 응답: 성공 근거 부족"
+  const diagnosedMismatch=run.status==="uncertain" && ["other_zone_changed","multiple_zones_changed","opposite_direction","different_step_change"].includes(run.diagnosis?.code);
+  const stateLabel = diagnosedMismatch?"목표와 다른 출력 변화 확인":run.status === "succeeded" && !claimableSuccess(run) ? "서버 응답: 성공 근거 부족"
     : statusText[run.status] || run.status || "상태 확인 중";
   const nextStatus = cancellingCurrentRun() && !TERMINAL.has(run.status)
     ? "취소 요청 확인 중 · 추가 조작 보류" : `${stateLabel} · 입력 출처: ${sourceText[run.source] || run.source || "확인 전"}`;
@@ -434,6 +449,7 @@ $("demo-scenario").addEventListener("change", () => {
 for (const zone of ["right", "left"]) {
   $("preset-" + zone).addEventListener("click", () => {
     if (state.busy || state.startUnknown || state.run && !TERMINAL.has(state.run.status)) return;
+    voice.stop(false);
     $("zone").value = zone;
     $("user-input").value = `${zone === "right" ? "오른쪽" : "왼쪽"} 화구 화력을 한 단계 올려줘`;
     $("user-input").focus();
@@ -671,10 +687,18 @@ $("cancel").addEventListener("click", () => transact(async () => {
     $("user-input").focus();
   }
 }));
+$("voice-input").addEventListener("click",()=>{
+  if($("voice-input").disabled)return;
+  if(speechAvailable)speechSynthesis.cancel();
+  if(state.voiceListening)voice.stop();else voice.start();
+});
+$("user-input").addEventListener("input",()=>{if(state.voiceListening)voice.stop(false);});
+window.addEventListener?.("pagehide",()=>voice.stop(false));
 $("apply-correction").addEventListener("click",()=>{
   const c=state.run?.diagnosis?.correction;
   if(!c || state.busy || state.demoUnverified || state.connection!=="online" || state.run.status!=="uncertain")return;
   const text=`${c.zone_id==="left"?"왼쪽":"오른쪽"} 화력 한 단계 ${c.direction==="decrease"?"내려줘":"올려줘"}`;
+  voice.stop(false);
   state.correctionDraft={text,zone:c.zone_id,original:state.submittedRequest};
   $("user-input").value=text;$("zone").value=c.zone_id;$("source").value="mock";
   $("status").textContent="교정 목표를 확인한 뒤 안내 시작을 누르세요. 아직 새 실행은 시작하지 않았습니다.";
@@ -682,6 +706,7 @@ $("apply-correction").addEventListener("click",()=>{
 });
 $("return-goal").addEventListener("click",()=>{
   if(!state.returnGoal || state.busy || state.demoUnverified || state.connection!=="online" || state.recoverRunId || state.run?.status!=="succeeded" || state.correctionRunId!==state.runId)return;
+  voice.stop(false);
   const goal=state.returnGoal;state.returnGoal=null;state.correctionRunId=null;
   $("user-input").value=goal.user_input;$("zone").value=goal.zone_id||"";$("source").value=goal.source;
   $("status").textContent="원래 목표를 확인한 뒤 안내 시작을 누르세요. 자동으로 조작하거나 시작하지 않습니다.";

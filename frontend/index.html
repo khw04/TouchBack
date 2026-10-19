@@ -38,6 +38,7 @@
             <select id="fixture-scenario"><option value="normal">정상 흐름 예시</option><option value="recovery">미인식 후 복구 예시</option><option value="sensor_error">센서 오류 예시</option></select>
             <p class="hint">화면 연습에는 실제 Agent 판정이 없습니다. 모든 최종 결과는 확인 불가입니다.</p>
           </div>
+          <p class="hint">음성 입력은 버튼을 눌러 마이크를 허용할 때만 시작합니다. 브라우저 음성 서비스의 온라인 처리가 필요할 수 있으며, 인식된 문장을 확인한 뒤 직접 실행합니다.</p>
           <label class="toggle"><input id="auto-speech" type="checkbox" checked> 새 안내 자동 읽기</label>
           <p id="speech-support" class="hint" role="status"></p>
           <form id="resume-form" class="resume-form" hidden>
@@ -71,7 +72,7 @@
       <textarea id="user-input" required rows="1">오른쪽 화구 화력을 한 단계 올려줘</textarea>
       <button id="start" type="submit" disabled>안내 시작 <span aria-hidden="true">↗</span></button>
     </form>
-    <div class="presets" aria-label="예시 목표"><span>빠른 입력</span><button id="preset-right" type="button" class="chip">오른쪽 한 단계 올리기</button><button id="preset-left" type="button" class="chip">왼쪽 한 단계 올리기</button><button id="recover-run" type="button" class="chip" hidden>진행 중 실행 불러오기</button></div>
+    <div class="presets" aria-label="예시 목표"><span>빠른 입력</span><button id="preset-right" type="button" class="chip">오른쪽 한 단계 올리기</button><button id="preset-left" type="button" class="chip">왼쪽 한 단계 올리기</button><button id="voice-input" type="button" class="chip" disabled aria-describedby="voice-note">음성 입력</button><span id="voice-note" class="voice-note">인식 문장 확인 후 실행</span><button id="recover-run" type="button" class="chip" hidden>진행 중 실행 불러오기</button></div>
   </section>
   <div class="session-line"><p id="connection" role="status" aria-live="polite">서버 연결 확인 전</p><p id="status" role="status" aria-live="polite">목표를 입력해 실행하세요.</p></div>
   <p id="error" class="error" role="alert" hidden></p>
@@ -107,7 +108,7 @@
       <div class="guide"><p id="phase" class="phase">시작 전</p><p id="instruction" class="instruction">목표를 입력하고 안내를 시작하세요.</p><p id="phase-detail" class="hint">현재 단계와 다음 행동이 여기에 표시됩니다.</p></div>
       <div class="actions primary-actions"><button id="ack" disabled>조작 완료 알림</button><button id="repeat" class="secondary" disabled>안내 다시 듣기</button></div>
       <div class="actions recovery-actions"><button id="cancel" class="quiet" disabled>실행 취소</button><button id="retry" class="quiet" disabled>상태 다시 확인</button></div>
-      <div class="actions correction-actions"><button id="apply-correction" class="secondary" type="button" hidden>교정 목표 입력</button><button id="return-goal" class="secondary" type="button" hidden>원래 목표 입력</button></div>
+      <div id="correction-actions" class="actions correction-actions" hidden><button id="apply-correction" class="secondary" type="button" hidden>교정 목표 입력</button><button id="return-goal" class="secondary" type="button" hidden>원래 목표 입력</button></div>
       <p id="observation-hint" class="hint">완료 알림은 성공 판정이 아닙니다. 서버 관측과 판정을 기다리세요.</p>
     </section>
     <aside class="insight-card" aria-labelledby="insight-title">
@@ -120,6 +121,6 @@
   </section>
   <footer><span>사용자 조작 → 관측 → 검증 → 필요 시 복구</span><span>모의 관측은 실물 성능 검증이 아닙니다.</span></footer>
 </main>
-<script type="module" src="./app.mjs?v=23"></script>
+<script type="module" src="./app.mjs?v=24"></script>
 </body>
 </html>

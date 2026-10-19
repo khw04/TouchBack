@@ -178,5 +178,20 @@
     "text": "화력 내리지 마",
     "selected": "left",
     "zone": null
+  },
+  {
+    "text": "오른쪽 화력을 한 단계 올려 줘.",
+    "selected": null,
+    "zone": "right"
+  },
+  {
+    "text": "왼쪽 화력 한 단계 내려 주세요",
+    "selected": null,
+    "zone": "left"
+  },
+  {
+    "text": "왼쪽 화력을 내려 주지 마",
+    "selected": "left",
+    "zone": null
   }
 ]

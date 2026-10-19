@@ -37,7 +37,7 @@ class VirtualCooktopAdapter(MockAdapter):
             schema_version="0.2",device_id="mock-device-01",session_id=self.session_id,seq=seq,
             source="mock",zone_id=zone or self.target_zone,window_start_ms=start,window_end_ms=end,
             beep_count=None if fault else beeps,
-            field_summary=None if fault else FieldSummary(rms=float(rms),unit="adc_count",sample_count=end-start,sample_rate_hz=1000,method="ac_rms_v1"),
+            field_summary=None if fault else FieldSummary(rms=float(rms),unit="adc_count",sample_count=(end-start)//5,sample_rate_hz=200,method="envelope_rms_v1"),
             quality=Quality(status="invalid",reasons=["disconnected"]) if fault else Quality(status="valid",reasons=[]),
             calibration_id="mock-test-v1"))
 

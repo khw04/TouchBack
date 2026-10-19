@@ -22,7 +22,7 @@ def diagnose_pair(goal, baselines, profiles, observations, context):
     correction=None
     if outside["steps"]:
         code="other_zone_changed" if not target["steps"] else "multiple_zones_changed"
-        message=f"{LABEL[other]} 화구의 출력 변화가 확인됐습니다." if code=="other_zone_changed" else "두 화구에서 출력 변화가 확인돼 현재 목표를 완료하지 않았습니다."
+        message=f"{LABEL[other]} 화구의 출력이 {'증가' if outside['steps']>0 else '감소'}했습니다." if code=="other_zone_changed" else "두 화구에서 출력 변화가 확인돼 현재 목표를 완료하지 않았습니다."
         if code=="other_zone_changed" and outside["steps"] in (-1,1):
             correction={"zone_id":other,"direction":"decrease" if outside["steps"]==1 else "increase"}
         result=verdict("uncertain","none",None,[code],evidence)
@@ -42,4 +42,5 @@ def diagnose_pair(goal, baselines, profiles, observations, context):
         message={"mock_range_limit":"모의 보정 범위의 최대 또는 최소 단계여서 요청한 변화를 진행할 수 없습니다.","touch_not_recognized_candidate":"비프음과 출력 변화가 없어 입력 미인식 가능성이 있습니다.","recognized_without_change":"비프음은 관측됐지만 출력 변화가 없습니다. 원인을 단정하지 않습니다."}[code]
         result=results[goal.zone_id] if code=="touch_not_recognized_candidate" else verdict("uncertain","none",None,[code],evidence)
     next_action="안내된 화구의 버튼을 확인하세요. 재조작은 새 안내가 있을 때만 하세요." if code=="touch_not_recognized_candidate" else "추가 조작을 멈추고 두 화구 상태를 확인하세요." if code!="goal_verified" else "요청한 변화의 확인이 끝났습니다."
+    result=result.model_copy(update={"evidence_ids":list(dict.fromkeys(evidence))})
     return {"code":code,"message":message,"next_action":next_action,"source":"mock","action_id":context.action_id,"evidence_ids":list(dict.fromkeys(evidence)),"zones":zones,"correction":correction},result

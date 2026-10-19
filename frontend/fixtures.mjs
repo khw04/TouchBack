@@ -7,7 +7,7 @@ export const FIXTURE_SCENARIOS = new Set(["normal", "recovery", "sensor_error"])
 export function fixtureGoal(userInput, selectedZone) {
   // Same conservative full-request gate as backend contracts/goal_policy.py.
   // Shared regression vectors guard Python/JavaScript parity.
-  const match = /^(?:인덕션\s*)?(?:(오른쪽|우측|왼쪽|좌측)\s*(?:화구(?:의)?\s*)?)?(?:화력|출력)(?:을|를)?\s*(?:좀\s*)?(?:(?:한\s*단계|한\s*단|1\s*단계|1\s*단)\s*)?(?:올려(?:줘|주세요)?|높여(?:줘|주세요)?|증가(?:시켜(?:줘|주세요)?|시켜\s*주세요|해(?:줘|주세요)?)?|키워(?:줘|주세요)?|내려(?:줘|주세요)?|낮춰(?:줘|주세요)?|줄여(?:줘|주세요)?|감소시켜(?:줘|주세요)?)[.!]?$/.exec(userInput.trim());
+  const match = /^(?:인덕션\s*)?(?:(오른쪽|우측|왼쪽|좌측)\s*(?:화구(?:의)?\s*)?)?(?:화력|출력)(?:을|를)?\s*(?:좀\s*)?(?:(?:한\s*단계|한\s*단|1\s*단계|1\s*단)\s*)?(?:올려\s*(?:줘|주세요)?|높여\s*(?:줘|주세요)?|증가(?:시켜(?:줘|주세요)?|시켜\s*주세요|해(?:줘|주세요)?)?|키워\s*(?:줘|주세요)?|내려\s*(?:줘|주세요)?|낮춰\s*(?:줘|주세요)?|줄여\s*(?:줘|주세요)?|감소시켜(?:줘|주세요)?)[.!]?$/.exec(userInput.trim());
   if (!match) return { zone: null, message: "지원하지 않거나 준비되지 않은 목표입니다. 화력을 한 단계 올리거나 내리는 단일 요청인지 확인해 주세요." };
   const mentionedZone = ["오른쪽", "우측"].includes(match[1]) ? "right" : match[1] ? "left" : null;
   if (selectedZone && mentionedZone && selectedZone !== mentionedZone) {

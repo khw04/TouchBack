@@ -32,3 +32,25 @@ def test_maintenance_never_fabricates_fresh_or_healthy_observations():
 
 def test_unconfigured_or_live_registry_does_not_register_mock_maintenance():
     assert create_registry_from_adapter(None).get("sensor_recalibration") is None
+
+
+def test_failed_required_resynchronization_cannot_publish_an_instruction(monkeypatch):
+    from unittest.mock import patch
+    from fastapi.testclient import TestClient
+    from app.main import app
+    from app.api.runs import run_store
+    from app.config import settings
+    from app.tools.base import ToolResult
+    run_store.reset()
+    monkeypatch.setattr(settings,"execution_mode","backend_stub")
+    monkeypatch.setattr(settings,"demo_enabled",False)
+    monkeypatch.setattr(settings,"openai_api_key","")
+    try:
+        with TestClient(app,base_url="http://127.0.0.1",client=("127.0.0.1",50000)) as c:
+            c.post("/api/demo/settings",json={"execution_mode":"mock_llm","scenario":"normal"})
+            with patch("app.tools.mock_state_tools.MockStateTool.execute",return_value=ToolResult(success=False,error="invalid other channel")):
+                r=c.post("/api/runs",json={"user_input":"오른쪽 화력 올려줘","source":"mock","zone_id":None}).json()
+            run=c.get("/api/runs/"+r["run_id"]).json()
+            assert run["status"]=="uncertain" and run["instruction"] is None
+            assert c.get("/api/demo").json()["active_run_id"] is None
+    finally:run_store.reset()
