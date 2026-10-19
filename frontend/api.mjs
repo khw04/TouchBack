@@ -51,6 +51,19 @@ export function validateRun(data, expectedId) {
   return data;
 }
 
+export function validateDemoMetadata(data) {
+  if (!record(data) || typeof data.enabled !== "boolean") invalid("모의 입력 설정 형식이 다릅니다.");
+  if (!data.enabled) return { enabled: false };
+  const allowed = new Set(["normal", "recovery", "sensor_error", "missing", "delayed", "no_change", "duplicate", "recovery_exhausted"]);
+  if (data.source !== "mock" || !["mock_llm", "real_llm"].includes(data.execution_mode) ||
+      data.physical_validation_performed !== false || !Array.isArray(data.scenarios) ||
+      !data.scenarios.length || data.scenarios.some(name => !allowed.has(name)) ||
+      new Set(data.scenarios).size !== data.scenarios.length || !data.scenarios.includes(data.scenario)) {
+    invalid("모의 입력 출처·실행 방식·시나리오가 유효하지 않습니다.");
+  }
+  return data;
+}
+
 function validateAction(data, expectedId, accepted = false) {
   validateIdentity(data, expectedId);
   if (accepted && data.accepted !== true) invalid("조작 완료 알림의 수락 여부가 없습니다.");
@@ -88,6 +101,8 @@ export function createApi(baseUrl = "", fetchImpl = fetch, { timeoutMs = 15000 }
     finally { clearTimeout(timer); }
   }
   return {
+    demoInfo: async () => validateDemoMetadata(await request("/api/demo")),
+    configureDemo: async scenario => validateDemoMetadata(await request("/api/demo/scenario", "POST", { scenario })),
     start: async (user_input, source, zone_id) => validateStart(await request("/api/runs", "POST", { user_input, source, zone_id })),
     get: async runId => validateRun(await request(`/api/runs/${encodeURIComponent(runId)}`), runId),
     ack: async (runId, actionId) => validateAction(await request(`/api/runs/${encodeURIComponent(runId)}/ack`, "POST", { action_id: actionId }), runId, true),

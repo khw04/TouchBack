@@ -1,4 +1,4 @@
-import { TERMINAL } from "./api.mjs?v=15";
+import { TERMINAL } from "./api.mjs?v=18";
 
 export function evidenceReport(run, { fixtureMode = false, connection = "unknown", lastConfirmedAt = null, capturedAt = new Date().toISOString(), submittedRequest = null } = {}) {
   if (!run?.run_id) throw new Error("저장할 실행 기록이 없습니다.");

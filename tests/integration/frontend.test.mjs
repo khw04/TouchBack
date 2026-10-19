@@ -363,3 +363,311 @@ test("fixture cancellation preserves its completed verdict and repeated cancella
   assert.equal(stopped.status, "stopped");
   assert.deepEqual(await fixture.cancel(active.run_id), stopped);
 });
+
+test("operator demo configuration carries no scenario label in the Agent start request", async () => {
+  const metadata = { enabled: true, source: "mock", execution_mode: "mock_llm", scenario: "recovery",
+    scenarios: ["normal", "recovery"], physical_validation_performed: false };
+  const calls=[];
+  const api=createApi("",async (url,options) => {
+    calls.push([url,options]);
+    return {ok:true,json:async()=>url==="/api/runs"?{run_id:"r1",status:"planning",execution_mode:"mock_llm"}:metadata};
+  });
+  assert.deepEqual(await api.demoInfo(),metadata);
+  assert.deepEqual(await api.configureDemo("recovery"),metadata);
+  await api.start("화력 올려줘","mock","right");
+  assert.deepEqual(JSON.parse(calls[1][1].body),{scenario:"recovery"});
+  assert.deepEqual(JSON.parse(calls[2][1].body),{user_input:"화력 올려줘",source:"mock",zone_id:"right"});
+});
+
+test("operator controls reject malformed or non-Mock metadata", async () => {
+  const valid={enabled:true,source:"mock",execution_mode:"mock_llm",scenario:"normal",scenarios:["normal"],physical_validation_performed:false};
+  const {validateDemoMetadata}=await import("../../frontend/api.mjs");
+  assert.deepEqual(validateDemoMetadata({enabled:false}),{enabled:false});
+  for(const bad of [null,{}, {...valid,source:"live"},{...valid,execution_mode:"backend_stub"},
+    {...valid,scenario:"unknown"},{...valid,scenarios:["normal","normal"]},{...valid,physical_validation_performed:true}]) {
+    assert.throws(()=>validateDemoMetadata(bad),error=>error.code==="invalid_response");
+  }
+});
+
+test("demo settings cannot change during planning, observation or uncertain start", async () => {
+  const {demoControlsDisabled,demoLabel}=await import("../../frontend/demo.mjs");
+  for(const status of ["planning","awaiting_clarification","awaiting_user","observing","recovering"])
+    assert.equal(demoControlsDisabled({run:{status}}),true);
+  for(const status of ["succeeded","uncertain","stopped","failed"])
+    assert.equal(demoControlsDisabled({run:{status}}),false);
+  assert.equal(demoControlsDisabled({busy:true}),true);
+  assert.equal(demoControlsDisabled({startUnknown:true}),true);
+  assert.equal(demoLabel("recovery"),"미인식 후 한 번 복구");
+});
+
+test("actual app blocks form submission and speech while initial demo lookup is pending", async () => {
+  const {loadApp,ok,demoMetadata,activeRun,flush}=await import('./app-harness.mjs');
+  let release,starts=0;
+  const pending=new Promise(resolve=>{release=resolve;});
+  const app=await loadApp(async (url,options)=>{
+    if(url==='/api/demo')return pending;
+    if(options.method==='POST'){starts++;return ok(activeRun);}
+    return ok(activeRun);
+  });
+  try {
+    assert.equal(app.el('start').disabled,true);
+    assert.equal(app.el('demo-controls').hidden,false);
+    await app.el('goal-form').fire('submit');
+    assert.equal(starts,0);assert.deepEqual(app.spoken,[]);
+    release(ok(demoMetadata));await flush();
+    assert.equal(app.el('start').disabled,false);
+    await app.el('goal-form').fire('submit');
+    assert.equal(starts,1);
+    assert.match(app.el('phase-detail').textContent,/실물은 조작하지 말고/);
+  } finally { release(ok(demoMetadata));await flush();app.close(); }
+});
+
+test("actual app keeps failed initial lookup locked and exposes successful retry", async () => {
+  const {loadApp,ok,demoMetadata}=await import('./app-harness.mjs');
+  let requests=0,starts=0;
+  const app=await loadApp(async (url)=>{
+    if(url==='/api/demo'){if(++requests===1)throw new Error('offline');return ok(demoMetadata);}
+    starts++;throw new Error('must not start');
+  });
+  try {
+    assert.equal(app.el('start').disabled,true);
+    assert.equal(app.el('demo-controls').hidden,false);
+    assert.equal(app.el('demo-reload').disabled,false);
+    assert.match(app.el('demo-status').textContent,/확인하지 못|확인할 수 없/);
+    await app.el('goal-form').fire('submit');assert.equal(starts,0);assert.deepEqual(app.spoken,[]);
+    await app.el('demo-reload').fire('click');
+    assert.equal(app.el('start').disabled,false);
+    assert.equal(app.el('demo-scenario').value,'normal');
+  } finally { app.close(); }
+});
+
+test("actual app preserves unknown selection after a subsequent 409 until confirmed lookup", async () => {
+  const {loadApp,ok,demoMetadata}=await import('./app-harness.mjs');
+  let selected='normal',changes=0;
+  const app=await loadApp(async (url,options)=>{
+    if(options.method==='GET')return ok({...demoMetadata,scenario:selected});
+    if(++changes===1){selected='recovery';throw new Error('response lost');}
+    return {ok:false,status:409,json:async()=>({code:'busy',message:'other tab active'})};
+  });
+  try {
+    app.el('demo-scenario').value='recovery';await app.el('demo-apply').fire('click');
+    assert.equal(app.el('start').disabled,true);
+    await app.el('demo-apply').fire('click');
+    assert.equal(app.el('start').disabled,true);
+    await app.el('demo-reload').fire('click');
+    assert.equal(app.el('start').disabled,false);assert.equal(app.el('demo-scenario').value,'recovery');
+  } finally { app.close(); }
+});
+
+test("actual app distinguishes confirmed disabled metadata and fixture from unknown", async () => {
+  const {loadApp,ok}=await import('./app-harness.mjs');
+  let calls=0;
+  const app=await loadApp(async()=>{calls++;return ok({enabled:false});});
+  try {assert.equal(app.el('start').disabled,false);assert.equal(app.el('demo-controls').hidden,true);}
+  finally {app.close();}
+  const fixture=await loadApp(async()=>{throw new Error('fixture must not fetch');},'?fixture=1');
+  try {assert.equal(fixture.el('start').disabled,false);assert.equal(fixture.el('demo-controls').hidden,true);assert.equal(calls,1);}
+  finally {fixture.close();}
+});
+
+test("actual app hides resumed instructions and speech until demo settings are confirmed", async () => {
+  const {loadApp,ok,demoMetadata,activeRun}=await import('./app-harness.mjs');
+  let reads=0;
+  const app=await loadApp(async url=>{
+    if(url==='/api/demo'){if(++reads===1)throw new Error('offline');return ok(demoMetadata);}
+    return ok(activeRun);
+  });
+  try {
+    app.el('resume-id').value='run-test';await app.el('resume-form').fire('submit');
+    assert.equal(app.el('ack').disabled,true);assert.equal(app.el('repeat').disabled,true);
+    assert.match(app.el('instruction').textContent,/보류/);assert.deepEqual(app.spoken,[]);
+    await app.el('demo-reload').fire('click');
+    assert.equal(app.el('ack').disabled,false);
+    assert.match(app.el('phase-detail').textContent,/실물은 조작하지 말고/);
+  } finally {app.close();}
+});
+
+test("actual app treats malformed initial metadata as unknown rather than disabled", async () => {
+  const {loadApp,ok}=await import('./app-harness.mjs');
+  let reads=0;
+  const app=await loadApp(async()=>ok(++reads===1?{}:{enabled:false}));
+  try {
+    assert.equal(app.el('start').disabled,true);assert.equal(app.el('demo-controls').hidden,false);
+    await app.el('demo-reload').fire('click');
+    assert.equal(app.el('start').disabled,false);assert.equal(app.el('demo-controls').hidden,true);
+  } finally {app.close();}
+});
+
+test("metadata retry cannot unmask a run whose server snapshot is unverified", async () => {
+  const {loadApp,ok,demoMetadata,activeRun}=await import('./app-harness.mjs');
+  let runReads=0;
+  const app=await loadApp(async(url,options)=>{
+    if(url==='/api/demo')return ok(demoMetadata);
+    if(options.method==='GET' && ++runReads>1)throw new Error('run connection lost');
+    return ok(activeRun);
+  });
+  try {
+    await app.el('goal-form').fire('submit');
+    await app.el('retry').fire('click');
+    const masked=app.el('instruction').textContent;
+    assert.doesNotMatch(masked,/\+ 버튼/);
+    await app.el('demo-reload').fire('click');
+    assert.equal(app.el('instruction').textContent,masked);
+    assert.equal(app.el('ack').disabled,true);
+  } finally {app.close();}
+});
+
+test("actual app speech harness exercises both supported and unsupported browsers", async () => {
+  const {loadApp,ok,demoMetadata,activeRun}=await import('./app-harness.mjs');
+  for(const speechSupported of [true,false]){
+    const app=await loadApp(async url=>ok(url==='/api/demo'?demoMetadata:activeRun),'',{speechSupported});
+    try {
+      await app.el('goal-form').fire('submit');
+      assert.equal(app.el('auto-speech').disabled,speechSupported?false:true);
+      assert.deepEqual(app.spoken,speechSupported?[activeRun.instruction.text]:[]);
+    } finally {app.close();}
+  }
+});
+
+for(const ending of ['stopped','succeeded','unknown'])test(`cancel intent suppresses recovery and terminal speech before ${ending} response`, async () => {
+  const {loadApp,ok,demoMetadata,activeRun,flush}=await import('./app-harness.mjs');
+  let releaseStep,releaseCancel,rejectCancel,ack=false,confirmed=false;
+  const step=new Promise(resolve=>{releaseStep=resolve;});
+  const cancel=new Promise((resolve,reject)=>{releaseCancel=resolve;rejectCancel=reject;});
+  const retryText='오른쪽 화구의 + 버튼을 다시 한 번 눌러 주세요.';
+  const recovery={...activeRun,instruction:{action_id:'act-2',text:retryText},events:[...activeRun.events,
+    {event_id:'evt-2',run_id:'run-test',action_id:'act-2',kind:'recovery',timestamp:'2026-10-18T00:00:01Z',source:'mock',message:retryText,evidence_ids:[]}]};
+  const terminal={...activeRun,status:ending==='succeeded'?'succeeded':'stopped',instruction:null,
+    verdict:ending==='succeeded'?{status:'success',verification_level:'exact_step',goal_satisfied:true,reason_codes:['requested_step_verified'],evidence_ids:['mock-evidence']}:null};
+  const app=await loadApp(async(url,options)=>{
+    if(url==='/api/demo')return ok(demoMetadata);
+    if(url.endsWith('/ack')){ack=true;return ok({run_id:'run-test',status:'observing',accepted:true});}
+    if(url.endsWith('/step'))return step;
+    if(url.endsWith('/cancel'))return cancel;
+    return ok(confirmed?terminal:ack?{...activeRun,status:'observing'}:activeRun);
+  });
+  let cancellation;
+  try {
+    await app.el('goal-form').fire('submit');await app.el('ack').fire('click');
+    const before=app.spoken.length,cancelCount=app.cancelCount();
+    cancellation=app.el('cancel').fire('click');await flush();
+    assert.ok(app.cancelCount()>cancelCount);
+    assert.doesNotMatch(app.el('instruction').textContent,/\+ 버튼/);
+    releaseStep(ok(recovery));await flush();
+    assert.doesNotMatch(app.el('instruction').textContent,/\+ 버튼/);
+    assert.equal(app.el('ack').disabled,true);assert.equal(app.el('repeat').disabled,true);
+    assert.deepEqual(app.spoken.slice(before),[]);
+    if(ending==='unknown'){
+      rejectCancel(new Error('cancel response lost'));await cancellation;
+      await app.el('retry').fire('click');
+      assert.doesNotMatch(app.el('instruction').textContent,/\+ 버튼/);
+      assert.equal(app.el('ack').disabled,true);assert.equal(app.el('repeat').disabled,true);
+    }else{
+      confirmed=true;releaseCancel(ok({run_id:'run-test',status:ending}));await cancellation;
+      assert.match(app.el('status').textContent,ending==='stopped'?/실행 중단/:/목표 확인/);
+      assert.deepEqual(app.spoken.slice(before),[]);
+      assert.equal(app.el('start').disabled,false);
+    }
+  } finally {
+    releaseStep(ok(recovery));confirmed=true;releaseCancel(ok({run_id:'run-test',status:'stopped'}));
+    if(cancellation)await cancellation;app.close();
+  }
+});
+
+test("manual confirmed lookup retries a lost step once with the same action", async () => {
+  const {loadApp,ok,demoMetadata,activeRun}=await import('./app-harness.mjs');
+  let ack=false,steps=[];
+  const terminal={...activeRun,status:'uncertain',instruction:null,verdict:{status:'uncertain',verification_level:'none',goal_satisfied:null,reason_codes:['synthetic-check'],evidence_ids:[]}};
+  let finished=false;
+  const app=await loadApp(async(url,options)=>{
+    if(url==='/api/demo')return ok(demoMetadata);
+    if(url.endsWith('/ack')){ack=true;return ok({run_id:'run-test',status:'observing',accepted:true});}
+    if(url.endsWith('/step')){
+      steps.push(JSON.parse(options.body));if(steps.length===1)throw new Error('request lost before server');
+      finished=true;return ok(terminal);
+    }
+    return ok(finished?terminal:ack?{...activeRun,status:'observing'}:activeRun);
+  });
+  try {
+    await app.el('goal-form').fire('submit');await app.el('ack').fire('click');
+    assert.equal(steps.length,1);
+    await app.el('retry').fire('click');
+    assert.deepEqual(steps,[{action_id:'act-1'},{action_id:'act-1'}]);
+    assert.match(app.el('status').textContent,/불확실/);
+    await app.el('retry').fire('click');assert.equal(steps.length,2);
+  } finally {app.close();}
+});
+
+test("polls do not duplicate an inflight step or automatically repeat failed POSTs", async () => {
+  const {loadApp,ok,demoMetadata,activeRun}=await import('./app-harness.mjs');
+  let ack=false,steps=0;
+  const app=await loadApp(async(url,options)=>{
+    if(url==='/api/demo')return ok(demoMetadata);
+    if(url.endsWith('/ack')){ack=true;return ok({run_id:'run-test',status:'observing',accepted:true});}
+    if(url.endsWith('/step')){steps++;throw new Error('offline');}
+    return ok(ack?{...activeRun,status:'observing'}:activeRun);
+  });
+  try {
+    await app.el('goal-form').fire('submit');await app.el('ack').fire('click');
+    for(let i=0;i<3;i++)await app.el('retry').fire('click');
+    assert.equal(steps,2);
+    assert.match(app.el('error').textContent,/한도|재시도/);
+  } finally {app.close();}
+});
+
+test("automatic polls and manual lookup cannot duplicate a pending observation POST", async () => {
+  const {loadApp,ok,demoMetadata,activeRun}=await import('./app-harness.mjs');
+  let ack=false,steps=0,release;
+  const pending=new Promise(resolve=>{release=resolve;});
+  const terminal={...activeRun,status:'uncertain',instruction:null,verdict:{status:'uncertain',verification_level:'none',goal_satisfied:null,reason_codes:['synthetic-check'],evidence_ids:[]}};
+  const app=await loadApp(async(url,options)=>{
+    if(url==='/api/demo')return ok(demoMetadata);
+    if(url.endsWith('/ack')){ack=true;return ok({run_id:'run-test',status:'observing',accepted:true});}
+    if(url.endsWith('/step')){steps++;return pending;}
+    return ok(ack?{...activeRun,status:'observing'}:activeRun);
+  });
+  try {
+    await app.el('goal-form').fire('submit');await app.el('ack').fire('click');
+    for(let i=0;i<3;i++)await app.poll();
+    await app.el('retry').fire('click');assert.equal(steps,1);
+    release(ok(terminal));
+  } finally {release(ok(terminal));await (await import('./app-harness.mjs')).flush();app.close();}
+});
+
+test("automatic polls after failed delivery do not silently resend an observation", async () => {
+  const {loadApp,ok,demoMetadata,activeRun}=await import('./app-harness.mjs');
+  let ack=false,steps=0;
+  const app=await loadApp(async(url,options)=>{
+    if(url==='/api/demo')return ok(demoMetadata);
+    if(url.endsWith('/ack')){ack=true;return ok({run_id:'run-test',status:'observing',accepted:true});}
+    if(url.endsWith('/step')){steps++;throw new Error('request never reached server');}
+    return ok(ack?{...activeRun,status:'observing'}:activeRun);
+  });
+  try {
+    await app.el('goal-form').fire('submit');await app.el('ack').fire('click');
+    for(let i=0;i<3;i++)await app.poll();assert.equal(steps,1);
+    assert.equal(app.el('error').hidden,false);assert.match(app.el('error').textContent,/상태 다시 확인/);
+    await app.el('retry').fire('click');assert.equal(steps,2);
+    for(let i=0;i<3;i++)await app.poll();assert.equal(steps,2);
+  } finally {app.close();}
+});
+
+test("a new goal after cancellation can speak its own instruction", async () => {
+  const {loadApp,ok,demoMetadata,activeRun}=await import('./app-harness.mjs');
+  let created=0,cancelled=false;
+  const next={...activeRun,run_id:'run-next',instruction:{action_id:'act-next',text:'왼쪽 화구의 + 버튼을 한 번 눌러 주세요.'},events:[]};
+  const app=await loadApp(async(url,options)=>{
+    if(url==='/api/demo')return ok(demoMetadata);
+    if(url==='/api/runs'&&options.method==='POST')return ok(++created===1?activeRun:next);
+    if(url.endsWith('/cancel')){cancelled=true;return ok({run_id:'run-test',status:'stopped'});}
+    return ok(url.includes('run-next')?next:cancelled?{...activeRun,status:'stopped',instruction:null}:activeRun);
+  });
+  try {
+    await app.el('goal-form').fire('submit');await app.el('cancel').fire('click');
+    const before=app.spoken.length;
+    app.el('user-input').value='왼쪽 화력 올려줘';app.el('zone').value='left';
+    await app.el('goal-form').fire('submit');
+    assert.deepEqual(app.spoken.slice(before),[next.instruction.text]);
+    assert.equal(app.el('ack').disabled,false);assert.equal(app.el('repeat').disabled,false);
+  } finally {app.close();}
+});
