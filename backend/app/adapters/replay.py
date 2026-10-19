@@ -24,7 +24,11 @@ class ReplayAdapter:
             while line := stream.readline(8193):
                 if len(line) > 8192 or not line.endswith(b"\n"):
                     raise ValueError("invalid replay line length or missing LF")
-                records.append(Observation.model_validate_json(json.dumps(json.loads(line.decode("utf-8"), object_pairs_hook=unique_object))))
+                try:
+                    records.append(Observation.model_validate_json(json.dumps(json.loads(line.decode("utf-8"), object_pairs_hook=unique_object))))
+                except (ValueError, RecursionError):
+                    # Reject the whole load without echoing a malformed input record.
+                    raise ValueError("invalid replay observation JSON") from None
         return cls(records)
 
     def _receive(self):
