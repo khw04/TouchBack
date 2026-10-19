@@ -59,11 +59,12 @@ def configure_settings(req: SettingsRequest, request: Request):
 def metadata(request: Request):
     if not local(request):
         return {"enabled": False}
+    active_run_id = run_store.active_run_id()
     if not enabled(request):
-        return {"enabled": False, "manageable": True, "api_key_configured": settings.is_openai_configured(),
+        return {"enabled": False, "manageable": True, "active_run_id": active_run_id, "api_key_configured": settings.is_openai_configured(),
                 "model": settings.openai_model, "execution_mode": settings.execution_mode,
                 "scenario": settings.mock_scenario, "scenarios": list(SCENARIOS)}
-    return {"enabled": True, "manageable": True, "api_key_configured": settings.is_openai_configured(),
+    return {"enabled": True, "manageable": True, "active_run_id": active_run_id, "api_key_configured": settings.is_openai_configured(),
             "model": settings.openai_model, "virtual_cooktop": run_store.virtual_demo, "source": "mock", "execution_mode": settings.execution_mode,
             "scenario": settings.mock_scenario, "scenarios": list(SCENARIOS),
             "physical_validation_performed": False}

@@ -28,8 +28,8 @@ def health() -> HealthResponse:
 
 @app.exception_handler(RunApiException)
 async def run_api_exception_handler(_: Request, exc: RunApiException) -> JSONResponse:
-    error = ErrorResponse(code=exc.code, message=exc.message)
-    return JSONResponse(status_code=exc.status_code, content=error.model_dump())
+    error = ErrorResponse(code=exc.code, message=exc.message, active_run_id=exc.active_run_id)
+    return JSONResponse(status_code=exc.status_code, content=error.model_dump(exclude_none=True))
 
 
 @app.exception_handler(RequestValidationError)
@@ -38,7 +38,7 @@ async def validation_exception_handler(_: Request, exc: RequestValidationError) 
         code="validation",
         message=f"요청 형식이 올바르지 않습니다: {exc.errors()}",
     )
-    return JSONResponse(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, content=error.model_dump())
+    return JSONResponse(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, content=error.model_dump(exclude_none=True))
 
 
 app.include_router(runs_router)

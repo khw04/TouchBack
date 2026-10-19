@@ -72,11 +72,14 @@ class RunApiException(Exception):
         status_code: int,
         code: Literal["validation", "unknown_run", "busy", "stale_action", "terminal_run"],
         message: str,
+        *,
+        active_run_id: str | None = None,
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.code = code
         self.message = message
+        self.active_run_id = active_run_id
 
 
 class StepRequest(AckRequest):
@@ -199,6 +202,15 @@ class RunStore:
         if self._active_run_id == state.run_id:
             self._active_run_id = None
 
+    def active_run_id(self) -> str | None:
+        """Return only an active identity for the local operator's explicit recovery."""
+        with self._lock:
+            state = self._runs.get(self._active_run_id) if self._active_run_id else None
+            if state is None:
+                return None
+            self._check_and_expire(state, self._now_utc())
+            return state.run_id if state.status not in TERMINAL_STATUSES else None
+
     def configure_demo(self, mode: str, scenario: str) -> None:
         from app.adapters.demo_setup import SCENARIOS
         if mode not in ("mock_llm", "real_llm") or scenario not in SCENARIOS:
@@ -209,7 +221,7 @@ class RunStore:
                 if current:
                     self._check_and_expire(current, self._now_utc())
                     if current.status not in TERMINAL_STATUSES:
-                        raise RunApiException(409, "busy", "실행 종료 후 시연 설정을 변경하세요.")
+                        raise RunApiException(409, "busy", "실행 종료 후 시연 설정을 변경하세요.", active_run_id=current.run_id)
             if mode == "real_llm" and not settings.is_openai_configured():
                 raise RunApiException(422, "validation", "실제 AI를 사용하려면 서버 .env에 API 키를 설정하고 서버를 다시 시작하세요.")
             settings.execution_mode = mode
@@ -227,7 +239,7 @@ class RunStore:
                 if state:
                     self._check_and_expire(state, self._now_utc())
                     if state.status not in TERMINAL_STATUSES:
-                        raise RunApiException(409, "busy", "실행 중에는 모의 입력을 변경할 수 없습니다. 먼저 종료해 주세요.")
+                        raise RunApiException(409, "busy", "실행 중에는 모의 입력을 변경할 수 없습니다. 먼저 종료해 주세요.", active_run_id=state.run_id)
             settings.mock_scenario = scenario
 
     def create_run(self, req: CreateRunRequest) -> CreateRunResponse:
@@ -251,7 +263,8 @@ class RunStore:
                         raise RunApiException(
                             status_code=status.HTTP_409_CONFLICT,
                             code="busy",
-                            message="현재 진행 중인 다른 실행이 있습니다.",
+                            message="현재 진행 중인 다른 실행이 있습니다. 해당 실행을 불러온 뒤 종료하거나 이어서 진행하세요.",
+                            active_run_id=active_run.run_id,
                         )
                 self._active_run_id = None
 

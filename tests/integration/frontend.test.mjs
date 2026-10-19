@@ -997,3 +997,105 @@ test('actual app shows waiting without packets until the observation response ar
   assert.equal(app.el('signal-flow').attributes.get('data-phase'),'delivering');
  }finally{app.close();}
 });
+
+
+test('409 busy preserves only an explicit active identity and malformed recovery metadata is rejected',async()=>{
+ const api=createApi('',async()=>({ok:false,status:409,json:async()=>({code:'busy',message:'진행 중',active_run_id:'run-active'})}));
+ await assert.rejects(api.start('방귀','mock','right'),e=>e.code==='busy'&&e.activeRunId==='run-active');
+ const other=createApi('',async()=>({ok:false,status:404,json:async()=>({code:'unknown_run',message:'없음',active_run_id:'run-active'})}));
+ await assert.rejects(other.get('old'),e=>e.activeRunId===null);
+ const bad=createApi('',async()=>({ok:true,json:async()=>({enabled:false,active_run_id:42})}));
+ await assert.rejects(bad.demoInfo(),/실행 ID/);
+});
+
+test('reload offers explicit recovery and clarification editing cancels before another start',async()=>{
+ const {loadApp,ok,demoMetadata,activeRun}=await import('./app-harness.mjs');const calls=[];let cancelled=false;
+ const run={...activeRun,status:'awaiting_clarification',instruction:null};
+ const app=await loadApp(async(url,options)=>{
+  calls.push([url,options.method]);
+  if(url==='/api/demo')return ok({...demoMetadata,virtual_cooktop:true,active_run_id:cancelled?null:run.run_id});
+  if(url.endsWith('/cancel')){cancelled=true;return ok({run_id:run.run_id,status:'stopped'});}
+  if(url==='/api/runs')return ok({...activeRun,run_id:'run-new'});
+  return ok(cancelled?{...run,status:'stopped'}:run);
+ });
+ try{
+  assert.equal(app.el('recover-run').hidden,false);assert.equal(app.el('start').disabled,true);assert.equal(app.el('demo-apply').disabled,true);
+  assert.deepEqual(calls,[['/api/demo','GET']]);
+  await app.el('recover-run').fire('click');assert.equal(app.el('cancel').textContent,'입력 수정하기');
+  assert.equal(app.el('user-input').value,'');
+  assert.equal(calls.filter(([,method])=>method==='POST').length,0);
+  assert.match(app.el('instruction').textContent,/입력 수정하기/);
+  await app.el('cancel').fire('click');assert.equal(app.el('start').disabled,false);assert.equal(app.el('recover-run').hidden,true);
+  assert.equal(app.el('demo-apply').disabled,false);assert.match(app.el('status').textContent,/목표를 수정/);
+  assert.equal(calls.filter(([url])=>url==='/api/runs').length,0);
+ }finally{app.close();}
+});
+
+test('a racing start conflict offers recovery without cancelling or creating a replacement automatically',async()=>{
+ const {loadApp,ok,demoMetadata,activeRun}=await import('./app-harness.mjs');const posts=[];
+ const app=await loadApp(async(url,options)=>{
+  if(url==='/api/demo')return ok({...demoMetadata,virtual_cooktop:true,active_run_id:null});
+  if(options.method==='POST'){posts.push(url);return {ok:false,status:409,json:async()=>({code:'busy',message:'진행 중',active_run_id:activeRun.run_id})};}
+  return ok(activeRun);
+ });
+ try{
+  await app.el('goal-form').fire('submit');assert.equal(app.el('recover-run').hidden,false);assert.equal(app.el('start').disabled,true);
+  assert.match(app.el('instruction').textContent,/기존 요청/);
+  await app.el('goal-form').fire('submit');assert.deepEqual(posts,['/api/runs']);
+  await app.el('recover-run').fire('click');assert.equal(app.el('recover-run').hidden,true);assert.equal(app.el('cancel').textContent,'실행 취소');
+  assert.deepEqual(posts,['/api/runs']);assert.match(app.el('instruction').textContent,/오른쪽/);
+ }finally{app.close();}
+});
+
+test('settings conflict also exposes recovery without changing an active execution',async()=>{
+ const {loadApp,ok,demoMetadata,activeRun}=await import('./app-harness.mjs');const posts=[];
+ const app=await loadApp(async(url,options)=>{
+  if(url==='/api/demo')return ok({...demoMetadata,virtual_cooktop:true,active_run_id:null});
+  if(options.method==='POST'){posts.push(url);return {ok:false,status:409,json:async()=>({code:'busy',message:'진행 중',active_run_id:activeRun.run_id})};}
+  return ok({...activeRun,status:'awaiting_clarification',instruction:null});
+ });
+ try{
+  await app.el('demo-apply').fire('click');assert.equal(app.el('recover-run').hidden,false);assert.equal(app.el('demo-apply').disabled,true);
+  await app.el('recover-run').fire('click');assert.equal(app.el('cancel').textContent,'입력 수정하기');assert.deepEqual(posts,['/api/demo/settings']);
+ }finally{app.close();}
+});
+
+test('lost clarification cancel keeps starting blocked until the stopped state is confirmed',async()=>{
+ const {loadApp,ok,demoMetadata,activeRun}=await import('./app-harness.mjs');let stopped=false;const posts=[];
+ const run={...activeRun,status:'awaiting_clarification',instruction:null};
+ const app=await loadApp(async(url,options)=>{
+  if(url==='/api/demo')return ok({...demoMetadata,virtual_cooktop:true});
+  if(options.method==='POST')posts.push(url);
+  if(url.endsWith('/cancel')){stopped=true;throw new Error('lost');}
+  return ok(stopped?{...run,status:'stopped'}:run);
+ });
+ try{
+  await app.el('goal-form').fire('submit');await app.el('cancel').fire('click');assert.equal(app.el('start').disabled,true);
+  await app.el('goal-form').fire('submit');assert.equal(posts.filter(p=>p==='/api/runs').length,1);
+  await app.el('retry').fire('click');assert.equal(app.el('start').disabled,false);
+ }finally{app.close();}
+});
+
+test('malformed recovery metadata after a missing ID cannot unlock starting',async()=>{
+ const {loadApp,ok,demoMetadata}=await import('./app-harness.mjs');let lookups=0;
+ const app=await loadApp(async(url)=>{
+  if(url==='/api/demo')return ok({...demoMetadata,virtual_cooktop:true,active_run_id:lookups++?'': 'old-run'});
+  return {ok:false,status:404,json:async()=>({code:'unknown_run',message:'없음'})};
+ });
+ try{
+  await app.el('recover-run').fire('click');assert.equal(app.el('start').disabled,true);assert.equal(app.el('recover-run').hidden,true);
+  assert.equal(app.el('settings-panel').open,true);
+ }finally{app.close();}
+});
+
+
+test('server restart during recovery allows a new start after metadata confirms no active run',async()=>{
+ const {loadApp,ok,demoMetadata}=await import('./app-harness.mjs');let lookups=0;
+ const app=await loadApp(async(url)=>{
+  if(url==='/api/demo')return ok({...demoMetadata,virtual_cooktop:true,active_run_id:lookups++?null:'old-run'});
+  return {ok:false,status:404,json:async()=>({code:'unknown_run',message:'없음'})};
+ });
+ try{
+  await app.el('recover-run').fire('click');assert.equal(app.el('start').disabled,false);assert.equal(app.el('recover-run').hidden,true);
+ }finally{app.close();}
+});
