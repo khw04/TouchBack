@@ -75,7 +75,9 @@ class MisoperationRecoverySkill:
                     decision=RecoveryDecisionType.LATE_SUCCESS,
                     next_status="succeeded",
                     instruction=None,
-                    message="지연된 신호에서 화력 증가가 확인되었습니다. 화력이 한 단계 올라갔습니다.",
+                    message=("지연된 신호에서 화력 감소가 확인되었습니다. 화력이 한 단계 내려갔습니다."
+                             if goal.direction == "decrease" else
+                             "지연된 신호에서 화력 증가가 확인되었습니다. 화력이 한 단계 올라갔습니다."),
                     updated_verdict=delayed_verdict,
                 )
 
