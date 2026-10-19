@@ -16,6 +16,9 @@ from app.tools.sensor_tools import (
 async def required_preflight(registry: ToolRegistry, zone_id: str) -> list[dict[str, Any]]:
     """Server-required checks; the LLM cannot skip or substitute them."""
     calls = []
+    if registry.get("state_resynchronization") is not None:
+        result=await registry.execute("state_resynchronization")
+        calls.append({"name":"state_resynchronization","arguments":{},"result":result.model_dump(),"origin":"required_preflight"})
     for name, arguments in (
         ("check_sensor_integrity", {}),
         ("read_field", {"zone_id": zone_id}),
@@ -205,6 +208,11 @@ def create_registry_from_adapter(
             "source": source,
         }
 
+    from app.adapters.virtual_cooktop import VirtualCooktopAdapter
+    if isinstance(adapter,VirtualCooktopAdapter) and source=="mock":
+        from app.tools.mock_state_tools import MockStateTool
+        for name in ("auto_calibration","state_resynchronization","sensor_recalibration"):
+            registry.register(MockStateTool(adapter,name))
     registry.register(ReadFieldTool(provider=read_field_provider))
     registry.register(CheckSensorIntegrityTool(provider=check_integrity_provider))
     if not for_planning:
