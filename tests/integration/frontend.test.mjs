@@ -671,3 +671,98 @@ test("a new goal after cancellation can speak its own instruction", async () => 
     assert.equal(app.el('ack').disabled,false);assert.equal(app.el('repeat').disabled,false);
   } finally {app.close();}
 });
+
+
+test("single-screen summary reports server evidence without inventing sensor readings", async () => {
+  const {screenSummary}=await import('../../frontend/screen.mjs');
+  assert.match(screenSummary(null).result,/아직/);
+  const run={status:'succeeded',source:'mock',execution_mode:'mock_llm',verdict:{status:'success',verification_level:'exact_step',goal_satisfied:true,evidence_ids:['e1'],reason_codes:[]}};
+  const summary=screenSummary(run);
+  assert.match(summary.result,/모의 관측에서 한 단계 증가/);
+  assert.match(summary.sensor,/1건/);
+  assert.match(summary.detail,/실제 AI 호출 없음/);
+  assert.doesNotMatch(JSON.stringify(summary),/120|비프음.*1회/);
+  for(const mode of ['ui_fixture','backend_stub']) assert.doesNotMatch(screenSummary({...run,execution_mode:mode}).result,/증가를 확인/);
+  assert.doesNotMatch(screenSummary({...run,verdict:{...run.verdict,evidence_ids:[]}}).result,/증가를 확인/);
+});
+
+test("single-screen uncertain reasons distinguish unconfigured input and processing errors", async()=>{
+  const {screenSummary}=await import('../../frontend/screen.mjs');
+  const run={status:'uncertain',execution_mode:'backend_stub',source:'mock',verdict:{reason_codes:['sensor_adapter_unconfigured'],evidence_ids:[]}};
+  assert.match(screenSummary(run).result,/설정되지 않아/);
+  assert.match(screenSummary({...run,verdict:{...run.verdict,reason_codes:['observation_timeout']}}).result,/제한 시간/);
+  assert.match(screenSummary({...run,verdict:{...run.verdict,reason_codes:['unknown_reason']}}).result,/확인하지 못/);
+});
+
+test("goal presets set matching input and zone without starting a run", async()=>{
+  const {loadApp,ok,demoMetadata}=await import('./app-harness.mjs');
+  const calls=[];
+  const app=await loadApp(async(url,options)=>{calls.push([url,options.method]);return ok(demoMetadata);});
+  try{
+    await app.el('preset-left').fire('click');
+    assert.equal(app.el('zone').value,'left');assert.match(app.el('user-input').value,/왼쪽/);
+    await app.el('preset-right').fire('click');
+    assert.equal(app.el('zone').value,'right');assert.match(app.el('user-input').value,/오른쪽/);
+    assert.deepEqual(calls,[['/api/demo','GET']]);
+    assert.match(app.el('screen-mode').textContent,/모의 모델/);
+    assert.match(app.el('screen-source').textContent,/모의 센서/);
+  } finally{app.close();}
+});
+
+test("active run prevents preset edits and cancellation masks the compact summary",async()=>{
+  const {loadApp,ok,demoMetadata,activeRun}=await import('./app-harness.mjs');
+  let cancelResolve;
+  const app=await loadApp(async(url)=>{
+    if(url==='/api/demo')return ok(demoMetadata);
+    if(url.endsWith('/cancel'))return new Promise(resolve=>{cancelResolve=resolve;});
+    return ok(activeRun);
+  });
+  try{
+    await app.el('goal-form').fire('submit');
+    assert.equal(app.el('preset-left').disabled,true);
+    await app.el('preset-left').fire('click');assert.equal(app.el('zone').value,'right');
+    assert.match(app.el('agent-stage').textContent,/조작 안내/);
+    const pending=app.el('cancel').fire('click');
+    assert.match(app.el('result-summary').textContent,/취소 결과/);
+    assert.match(app.el('agent-stage').textContent,/보류/);
+    cancelResolve(ok({run_id:activeRun.run_id,status:'stopped'}));await pending;
+  }finally{app.close();}
+});
+
+test("failed state lookup masks compact summary as well as the main instruction",async()=>{
+  const {loadApp,ok,demoMetadata,activeRun}=await import('./app-harness.mjs');
+  let broken=false;
+  const app=await loadApp(async(url)=>{if(url==='/api/demo')return ok(demoMetadata);if(broken)throw new Error('offline');return ok(activeRun);});
+  try{
+    await app.el('goal-form').fire('submit');broken=true;
+    await app.el('retry').fire('click');
+    assert.match(app.el('agent-stage').textContent,/현재 상태 확인 필요/);
+    assert.match(app.el('sensor-stage').textContent,/확인 불가/);
+    assert.match(app.el('result-summary').textContent,/현재 상태를 보증하지 않/);
+  }finally{app.close();}
+});
+
+test("demo metadata failure exposes settings recovery and fixture is explicitly labeled",async()=>{
+  const {loadApp}=await import('./app-harness.mjs');
+  const app=await loadApp(async()=>{throw new Error('offline');});
+  try{assert.equal(app.el('settings-panel').open,true);assert.equal(app.el('start').disabled,true);assert.match(app.el('screen-mode').textContent,/확인 실패/);}finally{app.close();}
+  const fixture=await loadApp(async()=>{throw new Error('must not fetch');},'?fixture=1');
+  try{assert.match(fixture.el('screen-source').textContent,/서버 판정 없음/);}finally{fixture.close();}
+});
+
+
+test("confirmed cancellation replaces compact pending text with the stopped result",async()=>{
+  const {loadApp,ok,demoMetadata,activeRun}=await import('./app-harness.mjs');
+  let cancelled=false;
+  const app=await loadApp(async(url)=>{
+    if(url==='/api/demo')return ok(demoMetadata);
+    if(url.endsWith('/cancel')){cancelled=true;return ok({run_id:activeRun.run_id,status:'stopped'});}
+    return ok(cancelled?{...activeRun,status:'stopped',instruction:null}:activeRun);
+  });
+  try{
+    await app.el('goal-form').fire('submit');await app.el('cancel').fire('click');
+    assert.match(app.el('result-summary').textContent,/취소|종료/);
+    assert.doesNotMatch(app.el('result-summary').textContent,/취소 결과를 확인/);
+    assert.equal(app.el('start').disabled,false);
+  }finally{app.close();}
+});

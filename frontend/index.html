@@ -3,88 +3,99 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>TouchBack 실행 화면</title>
-  <link rel="stylesheet" href="./style.css?v=4">
+  <title>TouchBack · Agent 시연</title>
+  <link rel="stylesheet" href="./style.css?v=5">
 </head>
 <body>
 <main>
-  <header>
-    <p class="eyebrow">TOUCHBACK · 실행 화면</p>
-    <h1 id="page-title">조작한 뒤, 실제 결과를 확인하세요</h1>
-    <p id="page-description">사용자가 직접 인덕션을 조작합니다. 화면은 서버가 보고한 안내와 관측 결과를 보여줍니다.</p>
-    <button id="large-text" type="button" class="secondary" aria-pressed="false">큰 글씨 켜기</button>
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark" aria-hidden="true">T</span><div><p class="eyebrow">TOUCHBACK</p><h1 id="page-title">조작에서 확인까지</h1></div></div>
+    <div class="header-state"><strong id="screen-mode">모델 확인 중</strong><span id="screen-source">입력 확인 중</span></div>
+    <nav class="toolbar" aria-label="시연 도구">
+      <button id="large-text" type="button" class="quiet" aria-pressed="false">큰 글씨 켜기</button>
+      <details id="settings-panel" class="drawer">
+        <summary id="settings-toggle">시연 설정</summary>
+        <div class="drawer-body">
+          <div class="panel-heading"><h2>시연 설정</h2><button id="close-settings" type="button" class="quiet">닫기</button></div>
+          <section id="demo-controls" aria-labelledby="demo-title" hidden>
+            <h3 id="demo-title">모의 관측 시연 설정</h3>
+            <p id="demo-mode"></p>
+            <p class="hint">실물 인덕션을 조작하지 마세요. 현재는 완료 알림으로 모의 관측을 진행합니다.</p>
+            <label for="demo-scenario">모의 입력</label><select id="demo-scenario"></select>
+            <div class="actions"><button id="demo-apply" type="button">모의 입력 적용</button><button id="demo-reload" type="button" class="secondary">시연 설정 다시 확인</button></div>
+            <p id="demo-status" role="status" aria-live="polite"></p>
+          </section>
+          <div class="grid">
+            <label>입력 출처<select id="source" form="goal-form"><option value="mock">모의 관측</option><option value="replay">녹화 재생</option><option value="live">실시간 센서</option></select></label>
+            <label>화구<select id="zone" form="goal-form"><option value="right">오른쪽</option><option value="left">왼쪽</option><option value="">입력에서 해석</option></select></label>
+          </div>
+          <div id="fixture-options" class="fixture-options" hidden>
+            <label for="fixture-scenario">화면 연습 시나리오</label>
+            <select id="fixture-scenario"><option value="normal">정상 흐름 예시</option><option value="recovery">미인식 후 복구 예시</option><option value="sensor_error">센서 오류 예시</option></select>
+            <p class="hint">화면 연습에는 실제 Agent 판정이 없습니다. 모든 최종 결과는 확인 불가입니다.</p>
+          </div>
+          <label class="toggle"><input id="auto-speech" type="checkbox" checked> 새 안내 자동 읽기</label>
+          <p id="speech-support" class="hint" role="status"></p>
+          <form id="resume-form" class="resume-form" hidden>
+            <h3>기존 실행 다시 확인</h3><label for="resume-id">실행 ID</label>
+            <div class="resume-controls"><input id="resume-id" type="text" autocomplete="off" placeholder="서버가 발급한 실행 ID"><button id="resume" type="submit" class="secondary">실행 ID 조회</button></div>
+          </form>
+        </div>
+      </details>
+      <details id="records-panel" class="drawer records-drawer">
+        <summary id="records-toggle">상세 기록</summary>
+        <div class="drawer-body">
+          <div class="panel-heading"><h2>판정과 근거</h2><button id="close-records" type="button" class="quiet">닫기</button></div>
+          <div class="badges"><strong id="origin">서버 연결 대기</strong><span id="mode">실행 방식: 확인 전</span><span id="run-id">실행 ID: 없음</span><span id="fixture-active" hidden></span></div>
+          <p id="last-confirmed">마지막 상태 확인: 없음</p>
+          <p id="verdict">서버 판정을 기다리는 중입니다.</p>
+          <div class="export-line"><a id="export-evidence" class="button secondary" aria-disabled="true">실행 기록 JSON 저장</a></div>
+          <p id="export-note" class="hint" role="status" aria-live="polite"></p>
+          <details id="evidence-preview" hidden><summary>JSON 내용 보기·복사</summary><pre id="evidence-json"></pre></details>
+          <h3>실행 기록 <span id="event-count" class="count">0건</span></h3>
+          <ol id="events" aria-label="실행 기록"><li>아직 기록이 없습니다.</li></ol>
+        </div>
+      </details>
+    </nav>
   </header>
-  <section id="demo-controls" class="card" aria-labelledby="demo-title" hidden>
-    <h2 id="demo-title">모의 관측 시연 설정</h2>
-    <p id="demo-mode"></p>
-    <p>실물 인덕션을 조작하지 마세요. 안내와 완료 알림은 합성 관측으로 Agent 판단·복구를 확인하는 단계입니다.</p>
-    <label for="demo-scenario">모의 입력</label>
-    <select id="demo-scenario"></select>
-    <div class="actions">
-      <button id="demo-apply" type="button">모의 입력 적용</button>
-      <button id="demo-reload" type="button" class="secondary">시연 설정 다시 확인</button>
-    </div>
-    <p id="demo-status" role="status" aria-live="polite"></p>
-  </section>
-  <section class="card" aria-labelledby="input-title">
-    <h2 id="input-title">1. 목표 입력</h2>
-    <form id="goal-form">
-      <label for="user-input">원하는 조작</label>
-      <textarea id="user-input" required rows="2">오른쪽 화구 화력을 한 단계 올려줘</textarea>
-      <div class="grid">
-        <label>입력 출처
-          <select id="source"><option value="mock">모의 관측</option><option value="replay">녹화 재생</option><option value="live">실시간 센서</option></select>
-        </label>
-        <label>화구
-          <select id="zone"><option value="right">오른쪽</option><option value="left">왼쪽</option><option value="">입력에서 해석</option></select>
-        </label>
-      </div>
-      <div id="fixture-options" class="fixture-options" hidden>
-        <label for="fixture-scenario">화면 연습 시나리오</label>
-        <select id="fixture-scenario">
-          <option value="normal">정상 흐름 예시</option>
-          <option value="recovery">미인식 후 복구 예시</option>
-          <option value="sensor_error">센서 오류 예시</option>
-        </select>
-        <p class="hint">세 시나리오 모두 화면 동작만 재현합니다. 위의 입력 출처 선택은 연습 설정값이며 실제 센서 입력이나 Agent 판정은 없습니다.</p>
-      </div>
-      <button id="start" type="submit" disabled>실행 시작</button>
+  <p id="page-description" class="intro">목표를 입력하고 현재 안내를 따라 진행하세요. 입력 출처와 모델은 상단에서 확인할 수 있습니다.</p>
+  <section class="request-card" aria-labelledby="input-title">
+    <div class="section-label"><span class="step-number">01</span><h2 id="input-title">어떤 조작을 도와드릴까요?</h2></div>
+    <form id="goal-form" class="goal-form">
+      <label for="user-input" class="sr-only">원하는 조작</label>
+      <textarea id="user-input" required rows="1">오른쪽 화구 화력을 한 단계 올려줘</textarea>
+      <button id="start" type="submit" disabled>안내 시작 <span aria-hidden="true">↗</span></button>
     </form>
-    <form id="resume-form" class="resume-form" hidden>
-      <h3>기존 실행 다시 확인</h3>
-      <label for="resume-id">실행 ID</label>
-      <div class="resume-controls"><input id="resume-id" type="text" autocomplete="off" placeholder="서버가 발급한 실행 ID"><button id="resume" type="submit" class="secondary">실행 ID 조회</button></div>
-      <p class="hint">화면을 새로 열었을 때 사용하세요. 새 실행을 만들지 않고 서버 상태만 조회합니다.</p>
-    </form>
+    <div class="presets" aria-label="예시 목표"><span>빠른 입력</span><button id="preset-right" type="button" class="chip">오른쪽 한 단계 올리기</button><button id="preset-left" type="button" class="chip">왼쪽 한 단계 올리기</button></div>
   </section>
-  <section class="card" aria-labelledby="state-title">
-    <h2 id="state-title">2. 실행 상태</h2>
-    <div class="badges"><strong id="origin">서버 연결 대기</strong><span id="mode">실행 방식: 확인 전</span><span id="run-id">실행 ID: 없음</span><span id="fixture-active" hidden></span></div>
-    <div class="connection-line"><p id="connection" role="status" aria-live="polite">서버 연결 확인 전</p><p id="last-confirmed">마지막 상태 확인: 없음</p></div>
-    <p id="status" class="status" role="status" aria-live="polite">목표를 입력해 실행하세요.</p>
-    <p id="error" class="error" role="alert" hidden></p>
-    <div class="guide" aria-labelledby="guide-title">
-      <p id="phase" class="phase">시작 전</p>
-      <h3 id="guide-title">지금 할 일</h3>
-      <p id="instruction" class="instruction">아직 안내가 없습니다.</p>
-      <p id="phase-detail" class="hint">목표를 입력하면 다음 단계가 여기에 표시됩니다.</p>
-    </div>
-    <div class="actions"><button id="ack" disabled>조작 완료 알림</button><button id="cancel" class="secondary" disabled>실행 취소</button><button id="retry" class="secondary" disabled>상태 다시 확인</button><button id="repeat" class="secondary" disabled>안내 다시 듣기</button></div>
-    <p id="speech-support" class="hint" role="status"></p>
-    <label class="toggle"><input id="auto-speech" type="checkbox" checked> 새 안내 자동 읽기</label>
-    <p id="observation-hint" class="hint">조작 완료 알림은 성공 판정이 아닙니다. 센서 관측과 서버 판정을 기다리세요.</p>
+  <div class="session-line"><p id="connection" role="status" aria-live="polite">서버 연결 확인 전</p><p id="status" role="status" aria-live="polite">목표를 입력해 실행하세요.</p></div>
+  <p id="error" class="error" role="alert" hidden></p>
+  <section class="workspace" aria-label="조작과 판단">
+    <section class="cooktop-card" aria-labelledby="cooktop-title">
+      <div class="section-label"><span class="step-number">02</span><h2 id="cooktop-title">인덕션 조작</h2><span class="outline-tag">화면 모형</span></div>
+      <div class="cooktop" role="img" aria-label="왼쪽과 오른쪽 두 화구의 인덕션 모형. 가상 버튼과 화력값은 아직 연결되지 않았습니다.">
+        <div class="hob"><span>왼쪽</span><div class="ring"><span>—</span></div><div class="touch-preview" aria-hidden="true"><span>−</span><span>+</span></div></div>
+        <div class="hob"><span>오른쪽</span><div class="ring"><span>—</span></div><div class="touch-preview" aria-hidden="true"><span>−</span><span>+</span></div></div>
+        <div class="cooktop-wordmark" aria-hidden="true">TOUCHBACK <span>VIRTUAL COOKTOP</span></div>
+      </div>
+      <p class="hint model-note">가상 조작 연결 전 · 지금은 아래 완료 알림으로 진행합니다.</p>
+    </section>
+    <section class="guide-card" aria-labelledby="guide-title">
+      <div class="section-label"><span class="step-number">03</span><h2 id="guide-title">지금 할 일</h2></div>
+      <div class="guide"><p id="phase" class="phase">시작 전</p><p id="instruction" class="instruction">목표를 입력하고 안내를 시작하세요.</p><p id="phase-detail" class="hint">현재 단계와 다음 행동이 여기에 표시됩니다.</p></div>
+      <div class="actions primary-actions"><button id="ack" disabled>조작 완료 알림</button><button id="repeat" class="secondary" disabled>안내 다시 듣기</button></div>
+      <div class="actions recovery-actions"><button id="cancel" class="quiet" disabled>실행 취소</button><button id="retry" class="quiet" disabled>상태 다시 확인</button></div>
+      <p id="observation-hint" class="hint">완료 알림은 성공 판정이 아닙니다. 서버 관측과 판정을 기다리세요.</p>
+    </section>
+    <aside class="insight-card" aria-labelledby="insight-title">
+      <div class="section-label"><span class="step-number">04</span><h2 id="insight-title">센서와 Agent</h2></div>
+      <div class="signal-block"><span class="signal-icon" aria-hidden="true">⌁</span><h3>센서 관측</h3><p id="sensor-stage">관측 대기</p><p class="hint">비프음·자기장 수치는 아직 화면에 제공되지 않습니다.</p></div>
+      <div class="signal-block"><span class="signal-icon" aria-hidden="true">◇</span><h3>Agent 진행</h3><p id="agent-stage">요청 대기</p><p id="agent-stage-detail" class="hint">서버가 확인한 진행 상태만 표시합니다.</p></div>
+      <div class="result-block"><h3>판정 요약</h3><p id="result-summary" role="status" aria-live="polite">아직 판정이 없습니다.</p></div>
+    </aside>
   </section>
-  <section class="card" aria-labelledby="result-title">
-    <h2 id="result-title">3. 판정과 근거</h2>
-    <p id="verdict">서버 판정을 기다리는 중입니다.</p>
-    <div class="export-line"><a id="export-evidence" class="button secondary" aria-disabled="true">실행 기록 JSON 저장</a><p class="hint">현재 화면의 실행 기록을 파일로 저장합니다. 실제 장치 검증 증거는 별도로 기록하세요.</p></div>
-    <p id="export-note" class="hint" role="status" aria-live="polite"></p>
-    <details id="evidence-preview" hidden><summary>JSON 내용 보기·복사</summary><pre id="evidence-json"></pre></details>
-    <h3>실행 기록 <span id="event-count" class="count">0건</span></h3>
-    <p class="hint">기록의 제목과 내용을 먼저 읽고, 필요한 경우 ‘근거 자세히 보기’를 펼치세요.</p>
-    <ol id="events" aria-label="실행 기록"><li>아직 기록이 없습니다.</li></ol>
-  </section>
+  <footer><span>사용자 조작 → 관측 → 검증 → 필요 시 복구</span><span>모의 관측은 실물 성능 검증이 아닙니다.</span></footer>
 </main>
-<script type="module" src="./app.mjs?v=18"></script>
+<script type="module" src="./app.mjs?v=19"></script>
 </body>
 </html>
