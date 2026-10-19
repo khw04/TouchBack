@@ -725,3 +725,35 @@ footer{
 @media(min-width:1100px) and (max-height:800px){main{padding-top:12px;padding-bottom:12px}footer{margin-top:8px}}
 
 .instruction {word-break:keep-all;}
+
+/* Illustrative sensor hardware; delivered observations, never simulator answers. */
+.sensor-flow {margin-top:12px;border:1px solid var(--line);border-radius:10px;padding:8px 10px;background:#f6f9f5;}
+.sensor-flow-caption {font-size:.7rem;font-weight:750;display:flex;justify-content:space-between;gap:8px;}
+.sensor-flow-caption span {font-weight:400;color:var(--muted);}
+.sensor-flow svg {display:block;width:100%;max-height:84px;overflow:visible;margin:3px 0;}
+.sensor-hardware>rect,.flow-agent>rect {fill:#fff;stroke:#b5c8bc;}
+.sensor-symbol {fill:none;stroke:#405e50;stroke-width:1.6;stroke-linecap:round;}
+.sensor-hardware text,.flow-agent text {fill:#27483a;font-size:10px;font-weight:700;}
+.sensor-hardware .flow-value {font-size:8px;font-weight:400;}
+.flow-agent path {fill:none;stroke:#547462;stroke-width:1.5;}
+.flow-wire {fill:none;stroke:#bdc8bf;stroke-width:2;stroke-dasharray:3 5;}
+.flow-packet {fill:#24614d;opacity:0;}
+.flow-warning {display:none;fill:#995014;font-size:9px;font-weight:700;paint-order:stroke;stroke:#f6f9f5;stroke-width:5px;}
+.flow-status {font-size:.65rem;line-height:1.4;min-height:1.4em;margin:0;color:var(--muted);}
+.sensor-flow[data-beep="warning"] .flow-beep .flow-warning,.sensor-flow[data-field="warning"] .flow-field .flow-warning {display:block;}
+.sensor-flow[data-beep="warning"] .flow-beep .flow-wire,.sensor-flow[data-field="warning"] .flow-field .flow-wire {stroke:#bd8c64;}
+.sensor-flow[data-beep="received"] .flow-beep .flow-wire,.sensor-flow[data-field="received"] .flow-field .flow-wire {stroke:#547462;stroke-dasharray:none;}
+.sensor-flow[data-beep="delivering"] .flow-beep .flow-packet,.sensor-flow[data-field="delivering"] .flow-field .flow-packet {animation:sensor-packet-a 1.8s linear both;}
+.sensor-flow[data-sequence="1"][data-beep="delivering"] .flow-beep .flow-packet,.sensor-flow[data-sequence="1"][data-field="delivering"] .flow-field .flow-packet {animation-name:sensor-packet-b;}
+.sensor-flow[data-phase="waiting"] .flow-wire {animation:sensor-wait 1.2s ease-in-out infinite alternate;}
+.sensor-flow[data-phase="blocked"] {opacity:.65;}
+@keyframes sensor-packet-a {0%{opacity:0;transform:translateX(0)}8%,92%{opacity:1}100%{opacity:0;transform:translateX(170px)}}
+@keyframes sensor-packet-b {0%{opacity:0;transform:translateX(0)}8%,92%{opacity:1}100%{opacity:0;transform:translateX(170px)}}
+@keyframes sensor-wait {from{opacity:.4}to{opacity:1}}
+@media(min-width:1100px) and (max-height:800px){.sensor-flow{margin-top:8px;padding:6px 9px}.sensor-flow svg{max-height:66px}.cooktop-card .model-note{font-size:.65rem;line-height:1.4;margin-top:7px}}
+
+@media(min-width:1100px) and (max-height:740px){
+  main{padding-top:8px;padding-bottom:8px}
+  .cooktop{padding:12px 12px 32px;min-height:210px}.ring{max-width:88px;margin:6px auto}
+  .sensor-flow svg{max-height:58px}.cooktop-card .model-note{margin-bottom:0}
+}

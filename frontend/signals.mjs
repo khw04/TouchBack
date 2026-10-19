@@ -20,3 +20,49 @@ export function signalsFor(run) {
 export function trailFor(run) {
   return (run?.events||[]).filter(item=>["instruction","tool_call","observation","recovery","verdict","error"].includes(item.kind)).slice(-3);
 }
+
+// Receipt animation is independent of the verdict and never reads simulator levels.
+export function createSignalFlow() {
+  let runId=null, seen=new Set(), sequence=0, view;
+  const idle=()=>({phase:"idle",beep:"idle",field:"idle",sequence,
+    beepLabel:"대기",fieldLabel:"대기",note:"모의 관측 수집 대기"});
+  view=idle();
+  function reset() { runId=null;seen.clear();sequence++;view=idle();return view; }
+  function pause() { sequence++;view={...idle(),phase:"blocked",note:"상태 확인 중 · 신호 표시 보류"};return view; }
+  function finish(token) {
+    if(token===view.sequence && view.phase==="delivering")
+      view={...view,phase:"received",beep:view.beep==="delivering"?"received":view.beep,field:view.field==="delivering"?"received":view.field,note:view.beep==="warning" || view.field==="warning"?"모의 관측 수신 · 누락/품질 이상, 성공 신호 아님":"모의 관측 전달됨 · 성공 여부는 Agent 판정 확인"};
+    return view;
+  }
+  function update(run,{blocked=false,reducedMotion=false}={}) {
+    if(runId!==run.run_id){reset();runId=run.run_id;}
+    const sim=run.simulation,actionId=sim?.last_press?.action_id;
+    // Only the current press's consumed Mock observations may travel to Agent.
+    const items=run.source==="mock" && sim?.kind==="virtual_cooktop" && actionId
+      ?sim.observations.filter(item=>item.run_id===run.run_id && item.action_id===actionId && item.device_observation.source==="mock"):[];
+    const ids=items.map(item=>JSON.stringify([item.action_id,item.observation_id]));
+    const fresh=ids.some(id=>!seen.has(id));ids.forEach(id=>seen.add(id));
+    if(["stopped","failed"].includes(run.status)) {
+      view={...pause(),note:run.status==="stopped"?"실행 종료 · 신호 전달 중단":"실행 실패 · 신호 전달 중단"};return view;
+    }
+    if(blocked)return pause();
+    if(!sim || run.source!=="mock") {view={...idle(),note:"가상 장치의 모의 관측만 표시합니다."};return view;}
+    if(!items.length) {
+      view={...idle(),phase:run.status==="observing"?"waiting":"idle",note:run.status==="observing"?"모의 센서 수집 중 · 아직 전달된 값 없음":"모의 관측 없음 · 성공 신호를 만들지 않습니다."};return view;
+    }
+    if(!fresh && view.phase==="delivering")return reducedMotion?finish(view.sequence):view;
+    const signal=signalsFor(run);
+    const healthy=items.every(item=>item.device_observation.quality.status==="valid");
+    const beepOk=healthy && items.every(item=>item.device_observation.beep_count!==null);
+    const fieldOk=healthy && items.every(item=>Boolean(item.device_observation.field_summary));
+    const moving=fresh && !reducedMotion && (beepOk || fieldOk);
+    if(fresh)sequence++;
+    view={phase:moving?"delivering":"received",sequence,
+      beep:beepOk?(moving?"delivering":"received"):"warning",
+      field:fieldOk?(moving?"delivering":"received"):"warning",
+      beepLabel:beepOk?signal.beep:"누락·품질 확인",fieldLabel:fieldOk?`Δ ${signal.delta}`:"누락·품질 확인",
+      note:!beepOk || !fieldOk?"모의 관측 수신 · 누락/품질 이상, 성공 신호 아님":moving?"모의 관측 전달 중 · 변화 없음도 관측입니다.":"모의 관측 전달됨 · 성공 여부는 Agent 판정 확인"};
+    return view;
+  }
+  return {update,reset,pause,finish,current:()=>view};
+}

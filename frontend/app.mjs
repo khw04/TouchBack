@@ -1,4 +1,4 @@
-import { signalsFor, trailFor } from "./signals.mjs?v=20";
+import { signalsFor, trailFor, createSignalFlow } from "./signals.mjs?v=21";
 import { screenSummary } from "./screen.mjs?v=20";
 import { demoLabel, demoControlsDisabled } from "./demo.mjs?v=20";
 import { createApi, freshSpeechItems, TERMINAL } from "./api.mjs?v=20";
@@ -24,6 +24,28 @@ state.demoInfo = null;
 state.demoUnverified = !fixtureMode;
 state.demoLoading = false;
 const reads = createReadGate(() => state.runId);
+const signalFlow=createSignalFlow();
+// Capture nodes so a finishing animation never depends on a later global page.
+const flowNodes={rail:$("signal-flow"),beep:$("flow-beep-label"),field:$("flow-field-label"),status:$("flow-status")};
+let flowTimer=null,flowSequence=null;
+function paintFlow(view) {
+  for(const name of ["phase","beep","field"])flowNodes.rail.setAttribute("data-"+name,view[name]);
+  flowNodes.rail.setAttribute("data-sequence",String(view.sequence%2));
+  flowNodes.beep.textContent=view.beepLabel;flowNodes.field.textContent=view.fieldLabel;
+  if(flowNodes.status.textContent!==view.note)flowNodes.status.textContent=view.note;
+  if(view.phase!=="delivering" || flowSequence!==view.sequence) {
+    clearTimeout(flowTimer);flowTimer=null;flowSequence=view.sequence;
+    if(view.phase==="delivering") {
+      const token=view.sequence;
+      flowTimer=setTimeout(()=>paintFlow(signalFlow.finish(token)),1800);
+      flowTimer.unref?.();
+    }
+  }
+}
+function renderFlow(run,blocked) {
+  paintFlow(signalFlow.update(run,{blocked,reducedMotion:window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false}));
+}
+
 const statusText = {
   planning: "계획 중", awaiting_clarification: "추가 확인 필요", awaiting_user: "사용자 조작 대기",
   observing: "센서 관측 중", recovering: "복구 안내 준비 중", succeeded: "서버 판정: 목표 확인",
@@ -93,6 +115,7 @@ function markUnverified(message) {
 }
 
 function maskUnverifiedSnapshot() {
+  paintFlow(signalFlow.pause());
   if (fixtureMode || !state.runId) return;
   if (speechAvailable) speechSynthesis.cancel();
   const snapshot = unverifiedSnapshot();
@@ -167,6 +190,7 @@ function renderScreen(run) {
   $("cooktop-note").textContent=sim?"가상 장치 내부 화력 · Agent는 이 숫자를 읽지 않고 모의 센서 관측으로 판정합니다.":"화면에서 시연을 활성화하면 가상 버튼을 조작할 수 있습니다.";
   const summary = screenSummary(run);
   const blocked = state.demoUnverified || cancellingCurrentRun() && !TERMINAL.has(run.status);
+  renderFlow(run,blocked || cancellingCurrentRun() || state.connection!=="online");
   if(blocked) {$("signal-note").textContent="설정·취소 결과 확인 중 · 표시된 수치는 마지막 관측입니다.";$("field-meter").hidden=true;}
   $("agent-stage").textContent = blocked ? "조작 안내 보류 중" : summary.agent;
   $("sensor-stage").textContent = blocked ? "상태 확인 대기" : summary.sensor;
@@ -440,6 +464,7 @@ $("goal-form").addEventListener("submit", event => {
     const input = $("user-input").value.trim();
     if (!input) throw new Error("목표를 입력하세요.");
     reads.invalidate();
+    paintFlow(signalFlow.reset());
     for(const zone of ["left","right"]) $("level-"+zone).textContent="—";
     for(const name of ["beep","field","delta"]) $("signal-"+name).textContent="—";
     $("signal-quality").textContent="확인 전";
