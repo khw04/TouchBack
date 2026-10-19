@@ -697,3 +697,13 @@ footer{
 .touch-controls {display:flex;justify-content:center;gap:12px;}
 .touch-controls button {padding:0;width:44px;height:40px;min-height:40px;font-size:1.5rem;border:1px solid #667c70;background:#263b32;color:#e1eee5;}
 .touch-controls button:disabled {opacity:.3;}
+
+.sensor-readings {display:grid;grid-template-columns:1fr 1fr;gap:9px;margin:9px 0;}
+.sensor-readings div {min-width:0;}
+.sensor-readings dt {font-size:.7rem;color:var(--muted);}
+.sensor-readings dd {margin:2px 0 0;font-weight:750;font-size:.85rem;font-variant-numeric:tabular-nums;}
+#field-meter {width:100%;height:9px;accent-color:var(--green);}
+.agent-trail {margin:8px 0 0;padding-left:16px;display:grid;gap:4px;}
+.agent-trail li {font-size:.7rem;line-height:1.5;overflow-wrap:anywhere;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;}
+#signal-note[data-state="observing"] {color:var(--green);font-weight:700;}
+@media(min-width:1100px) and (max-height:800px){.signal-block {padding-top:7px;padding-bottom:7px}.sensor-readings{gap:5px;margin:6px 0}.agent-trail{gap:2px}.result-block{margin-top:9px;padding:10px}}
