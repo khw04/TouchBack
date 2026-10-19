@@ -147,7 +147,12 @@ def test_openai_provider_fails_safely_when_key_missing():
     asyncio.run(_run())
 
 
-def test_llm_factory_selection():
+def test_llm_factory_selection(monkeypatch):
+    from app.config import settings
+    from app.llm.claude_provider import ClaudeProvider
+    monkeypatch.setattr(settings, "llm_provider", "anthropic")
+    assert isinstance(get_llm_provider(mode="real_llm"), ClaudeProvider)
+    monkeypatch.setattr(settings, "llm_provider", "openai")
     mock_p = get_llm_provider(mode="mock_llm")
     assert isinstance(mock_p, MockLlmProvider)
 

@@ -20,7 +20,8 @@ client = TestClient(app)
 
 
 @pytest.fixture(autouse=True)
-def reset_store_and_mode():
+def reset_store_and_mode(monkeypatch):
+    monkeypatch.setattr(settings, "llm_provider", "openai")
     run_store.reset()
     orig_mode = settings.execution_mode
     orig_key = settings.openai_api_key

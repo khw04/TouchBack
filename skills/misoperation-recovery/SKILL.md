@@ -57,3 +57,8 @@
 ## 5. API 안내 게시 안전 경계 (PR #16)
 
 복구 Skill이 RETRY_INSTRUCTION을 반환해도 API는 모델 복구 호출과 필수 센서 재점검이 통과한 경우에만 awaiting_user를 게시한다. 실제 조작 문장은 backend/app/agent/instructions.py의 지정 화구 + 버튼 1회 누름 템플릿을 사용하며 지속 누름·추가 조작을 허용하지 않는다. 모델 거절·빈 응답·처리 불가능한 모델 오류는 failed, 센서/기준선 점검 실패는 uncertain으로 종료하며 현재 안내를 제거한다. 모델 호출 중 악화된 센서 상태도 게시 직전 재점검한다. 관련 회귀 검사는 backend/tests/test_pr16_safety.py에 있다.
+
+
+## 2026-10-19 Claude 관측 Agent 적용
+
+real_llm에서는 모델이 관측 요약 조회, 필요 시 지연 관측/재시도 안전성 검토, 다음 행동(완료·중단·1회 재안내·사용자 확인 교정 제안)을 Tool로 선택한다. 복구 Skill의 허용 판단만으로 재안내를 게시하지 않는다. LLM 선택과 기존 품질/시간/보정/재시도 조건을 모두 통과해야 한다. 물리 조작 문장은 서버 템플릿이며 자동 제어/자동 교정은 없다. mock_llm은 기존 연습 흐름으로 남는다. 설정은 TOUCHBACK_LLM_PROVIDER=anthropic, ANTHROPIC_API_KEY, CLAUDE_MODEL이며 상세 계약·실제 호출 표본·한계는 [Agent판단](../../docs/Agent판단.md)을 따른다.

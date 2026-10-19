@@ -1,12 +1,14 @@
 # Agent 실행 설정과 검증 계약
 
+최신 변경(2026-10-19): 실제 제공자 기본값은 Claude이며 관측 단계의 Tool 선택·다음 행동 결정은 [Agent판단](Agent판단.md)을 따른다. 아래 PR #16 이전 기록은 당시 구현 이력이다.
+
 2026-10-14. 설정 로더·Tool/provider 기반(PR #11), Agent 관측·검증·복구 코드(PR #12), 목표 안전 검증(PR #15)에 이어 C-YD-04에서 실제 LLM Multi-turn Tool Calling 루프, 실행 모드(`mock_llm`, `real_llm`) 및 어댑터 자동 주입, 토큰 사용량 메트릭 기록이 구현 완료됐다.
 
 ## 입력과 실행 모드
 
 - `backend_stub`: 기본 개발/계약 회귀 모드. 센서 미설정 시 `sensor_adapter_unconfigured` uncertain 안전 종료를 검증한다.
 - `mock_llm`: 비용/키 없이 동작하는 모의 LLM + Mock 센서 모드. Multi-turn Tool Calling 루프, 사전 상태 점검, 오조작 복구 재안내, 토큰 사용량 집계 및 정상/복구/오류 3대 시나리오 E2E를 검증한다.
-- `real_llm`: 실제 OpenAI API(gpt-6-luna 기본값)를 호출하는 운영 모드. `OPENAI_API_KEY`가 필수이며, 키 누락 시 모의 모델로 속이지 않고 `status="failed"` 및 `provider_waiting` 명시적 에러 이벤트를 남기고 안전 중단한다.
+- `real_llm`: 선택한 실제 API(기본 Claude Haiku 5.5)를 호출하는 운영 모드. 선택 제공자의 키가 필수이며, 키 누락 시 모의 모델로 속이지 않고 `status="failed"` 및 `provider_waiting` 명시적 에러 이벤트를 남기고 안전 중단한다.
 
 Mock 센서는 비프음 횟수·자기장 변화·측정 품질 등의 테스트 관측을 반환한다. 시나리오 정답/명칭은 Agent 입력에서 숨기고 평가 측에 둔다. 같은 관측 계약을 사용해 실제 입력으로 교체한다.
 
@@ -16,8 +18,11 @@ Mock 센서는 비프음 횟수·자기장 변화·측정 품질 등의 테스�
 
 | 설정 | 값/용도 |
 |---|---|
+| TOUCHBACK_LLM_PROVIDER | anthropic 기본값 / openai 대안 |
+| ANTHROPIC_API_KEY | Claude 서버 키. 값은 브라우저/로그/커밋 금지 |
+| CLAUDE_MODEL | claude-haiku-5-5 기본값. 명시적 모델 교체 가능 |
 | OPENAI_API_KEY | 실제 키. 예제는 빈 값이며 미설정 시 real_llm 모드에서 provider_waiting으로 안전 실패 처리 |
-| OPENAI_MODEL | gpt-6-luna 초기 기본값. 교체 가능한 설정 |
+| OPENAI_MODEL | OpenAI 선택 시 gpt-6-luna 기본값. 교체 가능한 설정 |
 | OPENAI_REASONING_EFFORT | low 초기 기본값. payload reasoning_effort 반영 |
 | TOUCHBACK_EXECUTION_MODE | backend_stub / mock_llm / real_llm 실행 모드 지정 |
 
@@ -57,3 +62,6 @@ Mock 센서로 정상(Success), 변화 없음 후 제한된 복구(Recovery), �
 - registry의 사전 점검과 최종 Verifier는 observation_calibration_errors를 공유한다. 보정 ID·기종/세션·화구·출처·단위/방법/샘플링·표본수와 기준 RMS 범위를 확인하며, 최초/복구 안내 전 해당 프로필과 다른 관측을 차단한다. 프로필은 여전히 Mock 전용이며 live/replay를 검증 완료로 올리지 않는다.
 - 관측 수집 직전 기준선을 run/action/화구/시간창에 묶어 복사한다. 변화 없음 뒤 지연 관측이 도착하면 이 원래 기준선으로 검증한다. 재시도용으로 새로 읽은 기준선과 혼용하지 않으며 늦은 관측의 품질·시계·시간창·보정·정확 단계 검사는 유지한다. 최종 verdict 이벤트는 최종 판정의 evidence_ids를 가리킨다.
 - API 회귀 30개: 좌/우 정상과 잘못된 보정 ID/단위/RMS/표본/방법/샘플링, 모델 대기 중 변경된 재시도 기준선, 변화 없음→지연 exact_step/출력 증가만/다른 단계/품질 불량/시간창 밖을 검사했다. 이 브랜치 backend 전체 388개 통과. 외부 모델/실물 검증은 아니다.
+
+
+현재 real_llm 관측 후 결정은 decision_loop.py에서 모델이 Tool을 호출한다. 기존 replan_recovery_with_llm 문장 생성은 mock_llm 연습 호환 경로에 남는다. 안전 복구 Skill은 재시도 허용 조건을 검증하며, 실제 모델이 이를 조회한 뒤 재안내 또는 중단을 선택한다. 최신 설정·검증·한계는 Agent판단.md를 따른다.
