@@ -74,13 +74,13 @@
   <p id="error" class="error" role="alert" hidden></p>
   <section class="workspace" aria-label="조작과 판단">
     <section class="cooktop-card" aria-labelledby="cooktop-title">
-      <div class="section-label"><span class="step-number">02</span><h2 id="cooktop-title">인덕션 조작</h2><span class="outline-tag">화면 모형</span></div>
-      <div class="cooktop" role="img" aria-label="왼쪽과 오른쪽 두 화구의 인덕션 모형. 가상 버튼과 화력값은 아직 연결되지 않았습니다.">
-        <div class="hob"><span>왼쪽</span><div class="ring"><span>—</span></div><div class="touch-preview" aria-hidden="true"><span>−</span><span>+</span></div></div>
-        <div class="hob"><span>오른쪽</span><div class="ring"><span>—</span></div><div class="touch-preview" aria-hidden="true"><span>−</span><span>+</span></div></div>
+      <div class="section-label"><span class="step-number">02</span><h2 id="cooktop-title">인덕션 조작</h2><span class="outline-tag">가상 장치</span></div>
+      <div class="cooktop" aria-label="가상 인덕션">
+        <div class="hob"><span>왼쪽</span><div class="ring"><output id="level-left" aria-label="왼쪽 가상 화력">—</output></div><div class="touch-controls"><button id="virtual-left-decrease" type="button" aria-label="왼쪽 화력 낮추기" disabled>−</button><button id="virtual-left-increase" type="button" aria-label="왼쪽 화력 올리기" disabled>+</button></div></div>
+        <div class="hob"><span>오른쪽</span><div class="ring"><output id="level-right" aria-label="오른쪽 가상 화력">—</output></div><div class="touch-controls"><button id="virtual-right-decrease" type="button" aria-label="오른쪽 화력 낮추기" disabled>−</button><button id="virtual-right-increase" type="button" aria-label="오른쪽 화력 올리기" disabled>+</button></div></div>
         <div class="cooktop-wordmark" aria-hidden="true">TOUCHBACK <span>VIRTUAL COOKTOP</span></div>
       </div>
-      <p class="hint model-note">가상 조작 연결 전 · 지금은 아래 완료 알림으로 진행합니다.</p>
+      <p id="cooktop-note" class="hint model-note">화면에서 시연을 활성화하면 가상 버튼을 조작할 수 있습니다. 화력 표시는 모의 장치의 내부 상태입니다.</p>
     </section>
     <section class="guide-card" aria-labelledby="guide-title">
       <div class="section-label"><span class="step-number">03</span><h2 id="guide-title">지금 할 일</h2></div>

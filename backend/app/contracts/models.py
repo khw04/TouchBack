@@ -145,6 +145,7 @@ class RunResponse(CreateRunResponse):
     instruction: Instruction | None
     verdict: Verdict | None
     events: list[RunEvent]
+    simulation: dict | None = None  # Operator-only; never a goal or Agent tool input.
 
 
 class AckRequest(Contract):

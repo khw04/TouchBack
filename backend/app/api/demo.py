@@ -4,7 +4,7 @@ from fastapi import APIRouter, Request
 from app.adapters.demo_setup import DemoScenario, SCENARIOS
 from app.api.runs import RunApiException, run_store
 from app.config import settings
-from app.contracts.models import Contract
+from app.contracts.models import Contract, Zone, Text
 
 router = APIRouter(prefix="/api/demo", tags=["development-demo"])
 
@@ -20,6 +20,19 @@ def local(request: Request) -> bool:
 
 def enabled(request: Request) -> bool:
     return local(request) and settings.demo_enabled and settings.execution_mode in ("mock_llm", "real_llm")
+
+
+class PressRequest(Contract):
+    action_id: Text
+    zone_id: Zone
+    operation: Literal["increase", "decrease"]
+
+
+@router.post("/runs/{run_id}/press")
+def press(run_id: str, req: PressRequest, request: Request):
+    require_local_write(request)
+    if not enabled(request): raise RunApiException(403,"validation","시연을 먼저 활성화하세요.")
+    return run_store.press_virtual(run_id,req.action_id,req.zone_id,req.operation)
 
 
 class SettingsRequest(Contract):
@@ -51,7 +64,7 @@ def metadata(request: Request):
                 "model": settings.openai_model, "execution_mode": settings.execution_mode,
                 "scenario": settings.mock_scenario, "scenarios": list(SCENARIOS)}
     return {"enabled": True, "manageable": True, "api_key_configured": settings.is_openai_configured(),
-            "model": settings.openai_model, "source": "mock", "execution_mode": settings.execution_mode,
+            "model": settings.openai_model, "virtual_cooktop": run_store.virtual_demo, "source": "mock", "execution_mode": settings.execution_mode,
             "scenario": settings.mock_scenario, "scenarios": list(SCENARIOS),
             "physical_validation_performed": False}
 

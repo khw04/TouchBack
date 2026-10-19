@@ -48,6 +48,11 @@ export function validateRun(data, expectedId) {
       !filled(item.message) || !Array.isArray(item.evidence_ids))) {
     invalid("실행 기록 형식이 다릅니다.");
   }
+  if (data.simulation != null) {
+    const sim=data.simulation;
+    if(data.source!=="mock" || !record(sim) || sim.kind!=="virtual_cooktop" || !record(sim.levels) ||
+       ![sim.levels.left,sim.levels.right].every(v=>Number.isInteger(v)&&v>=0&&v<=9) || !Array.isArray(sim.observations)) invalid("가상 인덕션 상태가 유효하지 않습니다.");
+  }
   return data;
 }
 
@@ -113,6 +118,7 @@ export function createApi(baseUrl = "", fetchImpl = fetch, { timeoutMs = 15000 }
     get: async runId => validateRun(await request(`/api/runs/${encodeURIComponent(runId)}`), runId),
     ack: async (runId, actionId) => validateAction(await request(`/api/runs/${encodeURIComponent(runId)}/ack`, "POST", { action_id: actionId }), runId, true),
     step: async (runId, actionId) => validateRun(await request(`/api/runs/${encodeURIComponent(runId)}/step`, "POST", { action_id: actionId }), runId),
+    press: async (runId,action_id,zone_id,operation) => validateRun(await request(`/api/demo/runs/${encodeURIComponent(runId)}/press`, "POST", {action_id,zone_id,operation}),runId),
     cancel: async runId => {
       const response = validateAction(await request(`/api/runs/${encodeURIComponent(runId)}/cancel`, "POST"), runId);
       if (!TERMINAL.has(response.status)) invalid("취소 요청 뒤 종료 상태가 아닙니다.");

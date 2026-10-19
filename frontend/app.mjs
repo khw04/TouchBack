@@ -44,8 +44,13 @@ function controls() {
   $("demo-execution-mode").disabled = !state.demoInfo || demoControlsDisabled(state);
   $("demo-scenario").disabled = !state.demoInfo || demoControlsDisabled(state);
   $("demo-reload").disabled = state.busy || state.demoLoading;
+  const virtual = Boolean(state.demo?.virtual_cooktop || run?.simulation?.kind === "virtual_cooktop");
+  $("ack").hidden = virtual;
+  for (const zone of ["left","right"]) for (const operation of ["increase","decrease"]) {
+    $("virtual-"+zone+"-"+operation).disabled = !virtual || !run?.simulation || state.busy || cancellingCurrentRun() || state.demoUnverified || state.connection !== "online" || run.status !== "awaiting_user";
+  }
   const writable = canSendAction(fixtureMode ? "fixture" : "server", state.connection);
-  $("start").disabled = Boolean(state.demoInfo?.manageable && !state.demo) || state.busy || state.startUnknown || state.demoUnverified || ["offline", "invalid", "unverified"].includes(state.connection) || Boolean(run && !TERMINAL.has(run.status));
+  $("start").disabled = Boolean(state.demoInfo?.manageable && (!state.demo || !state.demo.virtual_cooktop || state.demoInfo.execution_mode === "real_llm" && state.demoInfo.api_key_configured === false)) || state.busy || state.startUnknown || state.demoUnverified || ["offline", "invalid", "unverified"].includes(state.connection) || Boolean(run && !TERMINAL.has(run.status));
   $("ack").disabled = state.busy || cancellingCurrentRun() || state.demoUnverified || !writable || !run?.instruction?.action_id || run.status !== "awaiting_user";
   $("cancel").disabled = state.busy || !writable || !run || TERMINAL.has(run.status);
   $("retry").disabled = state.busy || !state.runId || fixtureMode;
@@ -146,6 +151,9 @@ function renderEvents(items) {
   state.renderedEventIds = change.ids;
 }
 function renderScreen(run) {
+  const sim=run.simulation;
+  for(const zone of ["left","right"]) $("level-"+zone).textContent=sim?String(sim.levels[zone]):"—";
+  $("cooktop-note").textContent=sim?"가상 장치 내부 화력 · Agent는 이 숫자를 읽지 않고 모의 센서 관측으로 판정합니다.":"화면에서 시연을 활성화하면 가상 버튼을 조작할 수 있습니다.";
   const summary = screenSummary(run);
   const blocked = state.demoUnverified || cancellingCurrentRun() && !TERMINAL.has(run.status);
   $("agent-stage").textContent = blocked ? "조작 안내 보류 중" : summary.agent;
@@ -179,7 +187,7 @@ function renderAction(run) {
   const [phase, detail] = phaseFor(run);
   $("phase").textContent = phase;
   $("phase-detail").textContent = state.demo && run.source === "mock" && run.status === "awaiting_user"
-    ? "실물은 조작하지 말고, 안내를 확인한 뒤 완료 알림을 눌러 모의 관측을 진행하세요." : detail;
+    ? run.simulation ? "안내에 따라 왼쪽의 가상 인덕션 버튼을 누르세요. 모의 센서 관측과 판정이 이어집니다." : "실물은 조작하지 말고, 안내를 확인한 뒤 완료 알림을 눌러 모의 관측을 진행하세요." : detail;
   $("instruction").textContent = actionFor(run);
   if (state.demo && run.source === "mock" && TERMINAL.has(run.status)) {
     $("instruction").textContent = screenSummary(run).result;
@@ -282,7 +290,7 @@ function renderDemo(info) {
     $("demo-mode").textContent = `서버 설정: ${modeText[info.execution_mode]} · 입력: 모의 관측 · 실물 미검증`;
     $("source").value = "mock";
     $("source").disabled = true;
-    $("observation-hint").textContent = "완료 알림은 합성 관측을 진행합니다. Mock 판정은 실제 인덕션 성공이 아닙니다.";
+    $("observation-hint").textContent = info.virtual_cooktop ? "가상 버튼 클릭 후 모의 관측을 확인합니다. 실제 가열은 없습니다." : "완료 알림은 합성 관측을 진행합니다. Mock 판정은 실제 인덕션 성공이 아닙니다.";
     $("demo-scenario").replaceChildren(...info.scenarios.map(name => {
       const option = document.createElement("option"); option.value = name; option.textContent = demoLabel(name); return option;
     }));
@@ -300,6 +308,10 @@ function renderDemo(info) {
     $("page-title").textContent = "조작한 뒤, 실제 결과를 확인하세요";
     $("page-description").textContent = "사용자가 직접 인덕션을 조작합니다. 화면은 서버가 보고한 안내와 관측 결과를 보여줍니다.";
     $("observation-hint").textContent = "조작 완료 알림은 성공 판정이 아닙니다. 센서 관측과 서버 판정을 기다리세요.";
+  }
+  if (info.manageable && info.enabled && (!info.virtual_cooktop || info.execution_mode === "real_llm" && !info.api_key_configured)) {
+    $("settings-panel").open = true;
+    $("demo-status").textContent = "가상 인덕션 시연을 사용할 AI 방식을 선택하고 시연 설정 적용을 누르세요. 실제 AI는 서버 API 키가 필요합니다.";
   }
   if (state.run && state.connection === "online") renderAction(state.run);
   controls();
@@ -403,7 +415,7 @@ async function transact(task) {
 }
 $("goal-form").addEventListener("submit", event => {
   event.preventDefault();
-  if (state.demoUnverified || state.demoInfo?.manageable && !state.demo) { showError("실행 설정을 확인한 뒤 시작하세요."); return; }
+  if (state.demoUnverified || state.demoInfo?.manageable && (!state.demo || !state.demo.virtual_cooktop || state.demoInfo.execution_mode === "real_llm" && state.demoInfo.api_key_configured === false)) { showError("실행 설정을 확인한 뒤 시작하세요."); return; }
   if (state.run && !TERMINAL.has(state.run.status)) return;
   transact(async () => {
     const input = $("user-input").value.trim();
@@ -489,6 +501,19 @@ $("resume-form").addEventListener("submit", event => {
     if (!TERMINAL.has(run.status)) startPolling();
   });
 });
+for(const zone of ["left","right"]) for(const operation of ["increase","decrease"]) {
+  $("virtual-"+zone+"-"+operation).addEventListener("click",()=>{
+    if (!state.run?.simulation || state.busy || cancellingCurrentRun() || state.demoUnverified || state.connection!=="online" || state.run.status!=="awaiting_user") return;
+    transact(async()=>{
+      const runId=state.runId,actionId=state.run.instruction?.action_id;
+      reads.invalidate();
+      try {
+        const run=await api.press(runId,actionId,zone,operation);
+        if(state.runId===runId && !cancellingCurrentRun()) render(run);
+      }catch(error){markUnverified(`가상 조작 결과를 확인하지 못했습니다. 다시 누르지 말고 상태 다시 확인을 누르세요. ${error.message}`);}
+    });
+  });
+}
 $("ack").addEventListener("click", () => transact(async () => {
   const actionId = state.run?.instruction?.action_id;
   if (!actionId) return;
