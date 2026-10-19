@@ -785,11 +785,20 @@ class RunStore:
                     with self._lock:
                         self._check_and_expire(state, self._now_utc())
                         return state.status == "observing" and state.generation == expected_generation and self._active_run_id == run_id
+                def record_tool_fact(call):
+                    # A completed Tool is an audit fact, independent of later model/state failure.
+                    # This worker owns each callback once; duplicate step never starts a worker.
+                    with self._lock:
+                        current = self._runs.get(run_id)
+                        if current is state:
+                            succeeded = call["result"]["success"]
+                            choice = call["result"].get("data", {}).get("action", "")
+                            self._add_event(current, "tool_call", f"관측 Agent Tool '{call['name']}' {'완료' if succeeded else '안전 차단'} {choice}", action_id)
                 try:
                     verdict, feedback, recovery = await decide_after_observation(
                         orch, goal=goal, verdict=verdict, feedback=feedback, retry_count=retry_count,
                         run_id=run_id, action_id=action_id, window_start_ms=window_start_ms,
-                        window_end_ms=window_end_ms, is_current=is_current)
+                        window_end_ms=window_end_ms, is_current=is_current, on_tool_executed=record_tool_fact)
                 except FATAL_LLM_ERRORS as exc:
                     recovery_llm_error = exc
                     raise
@@ -897,11 +906,6 @@ class RunStore:
             now = self._now_utc()
             current_state.verdict = verdict
             current_state.diagnosis = orch.diagnosis
-            for call in orch.executed_tool_calls:
-                if call.get("origin") == "observation_agent":
-                    succeeded = call["result"]["success"]
-                    choice = call["result"].get("data", {}).get("action", "")
-                    self._add_event(current_state, "tool_call", f"관측 Agent Tool '{call['name']}' {'완료' if succeeded else '안전 차단'} {choice}", action_id)
             if getattr(orch, "agent_choice", None):
                 self._add_event(current_state, "plan", f"Agent 다음 행동 선택: {orch.agent_choice}", action_id, evidence_ids=verdict.evidence_ids)
             next_status = orch.determine_next_status(verdict)

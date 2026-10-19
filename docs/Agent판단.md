@@ -49,3 +49,8 @@ CLAUDE_MODEL=claude-haiku-5-5
 검증: 전체 백엔드 540개와 프런트 85개 통과. 백엔드는 backend_stub/demo=false/빈 제공자 키 환경에서 실행했고 기존 deprecation warning 6개가 있다. Claude HTTP 주입/판단 루프 신규 회귀 41개에 모델 선택, 근거 없는 성공/재시도 차단, 중단/교정 선택, 중복 step/안전성 검토, 취소·시간 초과와 늦은 사용량 보존을 포함한다. Node 구문·Python compileall·git diff --check도 통과했다. LSP/Ruff/Pylint/Pyright는 설치되어 있지 않아 실행하지 못했다.
 
 실제 FastAPI+브라우저에서는 Claude 키 설정 여부/모델 표시, 오른쪽 요청 후 왼쪽 변화에서 실제 모델의 stop 선택, 미인식에서 assess_retry_safety→retry 선택과 두 번째 조작 후 complete를 확인했다. 1280×720 한 화면 표시, 브라우저 경고/오류 없음도 확인했다. 실제 센서/실제 음성 인식/사용자 접근성 평가/통계적 모델 성능은 미검증이다. 키와 원본 PDF는 변경·출력·커밋하지 않았다.
+
+
+## PR #35 리뷰: 실패 후 Tool 사실 보존
+
+관측 Tool이 끝나면 worker가 원래 run/action에 tool_call 사실을 한 번 기록한다. 후속 모델 오류/자유 문장/한도 소진/취소/시간 초과와 독립적이며, 늦은 사실 기록이 실행 상태·판정·다음 실행 잠금을 변경하지 않는다. 상태 반영에 성공한 행동 선택 plan과 실제 Tool 실행 사실을 구분한다. 5개 회귀에서 수정 전 누락을 재현하고 수정 후 기록 보존·중복 step 멱등·종료 상태 보호를 확인한다.

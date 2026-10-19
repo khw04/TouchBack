@@ -195,3 +195,56 @@ def test_model_must_inspect_before_any_action(monkeypatch):
     with client() as c:
         ended=press(c,begin(c));assert ended['status']=='uncertain'
         assert sum('안전 차단' in e['message'] for e in ended['events'])==2
+
+
+@pytest.mark.parametrize('actions,expected_count',[
+    (['inspect_observation','free_text'],1),(['inspect_observation']*4,4)])
+def test_performed_tool_facts_survive_failed_model_loop_once(monkeypatch,actions,expected_count):
+    p=DecisionProvider(actions);monkeypatch.setattr('app.api.runs.get_llm_provider',lambda **_:p)
+    with client() as c:
+        ended=press(c,begin(c));assert ended['status']=='failed'
+        facts=[e for e in ended['events'] if e['kind']=='tool_call' and '관측 Agent Tool' in e['message']]
+        assert len(facts)==expected_count
+        rid=ended['run_id'];action=ended['simulation']['last_press']['action_id']
+        repeated=c.post('/api/runs/'+rid+'/step',json={'action_id':action}).json()
+        assert repeated['events']==ended['events']
+        assert all(e['run_id']==rid and e['action_id']==action for e in facts)
+        assert not any('Agent 다음 행동 선택' in e['message'] for e in ended['events'])
+
+
+def test_performed_inspect_survives_subsequent_provider_failure(monkeypatch):
+    class Failure(DecisionProvider):
+        async def generate(self,messages,tools=None):
+            if messages[-1]['role']=='tool':raise LlmProviderError('offline injected provider failure')
+            return await super().generate(messages,tools)
+    p=Failure(['inspect_observation']);monkeypatch.setattr('app.api.runs.get_llm_provider',lambda **_:p)
+    with client() as c:
+        ended=press(c,begin(c));assert ended['status']=='failed'
+        assert sum('관측 Agent Tool' in e['message'] for e in ended['events'])==1
+
+
+@pytest.mark.parametrize('cancel',[False,True])
+def test_tool_facts_before_cancel_or_timeout_do_not_publish_a_decision(monkeypatch,cancel):
+    class HoldAfterInspect(DecisionProvider):
+        async def generate(self,messages,tools=None):
+            if messages[-1]['role']=='tool':
+                self.entered.set();await asyncio.sleep(.2)
+            return await super().generate(messages,tools)
+    p=HoldAfterInspect(['inspect_observation','complete'])
+    monkeypatch.setattr('app.api.runs.get_llm_provider',lambda **_:p)
+    if not cancel:monkeypatch.setattr('app.api.runs.TIMEOUT_OBSERVING_SECONDS',.06)
+    with client() as c:
+        run=begin(c);rid=run['run_id'];action=run['instruction']['action_id']
+        c.post('/api/demo/runs/'+rid+'/press',json={'action_id':action,'zone_id':'right','operation':'increase'})
+        results=[];worker=threading.Thread(target=lambda:results.append(c.post('/api/runs/'+rid+'/step',json={'action_id':action}).json()))
+        worker.start();assert p.entered.wait(2)
+        if cancel:c.post('/api/runs/'+rid+'/cancel')
+        worker.join(3);assert not worker.is_alive()
+        time.sleep(.25)
+        next_run=begin(c)
+        ended=c.get('/api/runs/'+rid).json()
+        assert ended['status']==('stopped' if cancel else 'uncertain')
+        assert sum('관측 Agent Tool' in e['message'] for e in ended['events'])==1
+        assert not any('Agent 다음 행동 선택' in e['message'] for e in ended['events'])
+        assert len([e for e in ended['events'] if '복구 토큰 메트릭' in e['message']])==1
+        assert run_store.active_run_id()==next_run['run_id']
