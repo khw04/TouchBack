@@ -20,9 +20,11 @@
           <section id="demo-controls" aria-labelledby="demo-title" hidden>
             <h3 id="demo-title">모의 관측 시연 설정</h3>
             <p id="demo-mode"></p>
-            <p class="hint">실물 인덕션을 조작하지 마세요. 현재는 완료 알림으로 모의 관측을 진행합니다.</p>
+            <label for="demo-execution-mode">AI 실행 방식</label><select id="demo-execution-mode"><option value="mock_llm">Mock LLM · 비용 없는 흐름 연습</option><option id="real-mode-option" value="real_llm">실제 AI · 서버 API 키 사용</option></select>
+            <p id="api-readiness" class="hint"></p>
+            <p class="hint">실물 인덕션을 조작하지 마세요. 현재는 완료 알림으로 모의 관측을 진행합니다. 시나리오를 바꾸면 즉시 서버에 적용합니다.</p>
             <label for="demo-scenario">모의 입력</label><select id="demo-scenario"></select>
-            <div class="actions"><button id="demo-apply" type="button">모의 입력 적용</button><button id="demo-reload" type="button" class="secondary">시연 설정 다시 확인</button></div>
+            <div class="actions"><button id="demo-apply" type="button">시연 설정 적용</button><button id="demo-reload" type="button" class="secondary">시연 설정 다시 확인</button></div>
             <p id="demo-status" role="status" aria-live="polite"></p>
           </section>
           <div class="grid">

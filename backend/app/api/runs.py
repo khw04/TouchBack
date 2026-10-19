@@ -196,6 +196,23 @@ class RunStore:
         if self._active_run_id == state.run_id:
             self._active_run_id = None
 
+    def configure_demo(self, mode: str, scenario: str) -> None:
+        from app.adapters.demo_setup import SCENARIOS
+        if mode not in ("mock_llm", "real_llm") or scenario not in SCENARIOS:
+            raise RunApiException(422, "validation", "지원하지 않는 시연 설정입니다.")
+        with self._lock:
+            if self._active_run_id is not None:
+                current = self._runs.get(self._active_run_id)
+                if current:
+                    self._check_and_expire(current, self._now_utc())
+                    if current.status not in TERMINAL_STATUSES:
+                        raise RunApiException(409, "busy", "실행 종료 후 시연 설정을 변경하세요.")
+            if mode == "real_llm" and not settings.is_openai_configured():
+                raise RunApiException(422, "validation", "실제 AI를 사용하려면 서버 .env에 API 키를 설정하고 서버를 다시 시작하세요.")
+            settings.execution_mode = mode
+            settings.mock_scenario = scenario
+            settings.demo_enabled = True
+
     def configure_mock_scenario(self, scenario: str) -> None:
         from app.adapters.demo_setup import SCENARIOS
         if scenario not in SCENARIOS:
