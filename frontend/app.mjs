@@ -1,9 +1,9 @@
-import { signalsFor, trailFor, createSignalFlow } from "./signals.mjs?v=21";
-import { screenSummary } from "./screen.mjs?v=20";
-import { demoLabel, demoControlsDisabled } from "./demo.mjs?v=22";
-import { createApi, freshSpeechItems, TERMINAL } from "./api.mjs?v=22";
-import { createFixture } from "./fixtures.mjs?v=20";
-import { actionFor, claimableSuccess, phaseFor, unverifiedSnapshot, verdictLabel } from "./presentation.mjs?v=22";
+import { signalsFor, trailFor, createSignalFlow } from "./signals.mjs?v=23";
+import { screenSummary } from "./screen.mjs?v=23";
+import { demoLabel, demoControlsDisabled } from "./demo.mjs?v=23";
+import { createApi, freshSpeechItems, TERMINAL } from "./api.mjs?v=23";
+import { createFixture } from "./fixtures.mjs?v=23";
+import { actionFor, claimableSuccess, phaseFor, unverifiedSnapshot, verdictLabel } from "./presentation.mjs?v=23";
 import { eventChange, eventLabel, eventSource } from "./events.mjs?v=20";
 import { canSendAction, connectionLabel } from "./connection.mjs?v=20";
 import { evidenceReport, evidenceFilename } from "./evidence.mjs?v=20";
@@ -24,6 +24,9 @@ state.demoInfo = null;
 state.demoUnverified = !fixtureMode;
 state.demoLoading = false;
 state.recoverRunId = null;
+state.correctionDraft=null;
+state.returnGoal=null;
+state.correctionRunId=null;
 const reads = createReadGate(() => state.runId);
 const signalFlow=createSignalFlow();
 // Capture nodes so a finishing animation never depends on a later global page.
@@ -62,6 +65,13 @@ $("resume-form").hidden = fixtureMode;
 function controls() {
   const run = state.run;
   const cannotEdit = state.busy || state.startUnknown || Boolean(state.recoverRunId) || Boolean(run && !TERMINAL.has(run.status));
+  const correction=run?.diagnosis?.correction;
+  const confirmed=run && TERMINAL.has(run.status) && state.connection==="online" && !state.demoUnverified && !state.recoverRunId;
+  $("apply-correction").hidden=!confirmed || run.status!=="uncertain" || !correction;
+  $("apply-correction").disabled=state.busy;
+  $("return-goal").hidden=!confirmed || run.status!=="succeeded" || state.correctionRunId!==run.run_id || !state.returnGoal;
+  $("return-goal").disabled=state.busy;
+  $("reset-device").disabled=!state.demo || !state.demo.virtual_cooktop || demoControlsDisabled(state) || state.demoUnverified;
   $("recover-run").hidden = !state.recoverRunId;
   $("recover-run").disabled = state.busy || state.demoLoading;
   $("cancel").textContent = run?.status === "awaiting_clarification" ? "입력 수정하기" : "실행 취소";
@@ -185,6 +195,10 @@ function renderEvents(items) {
 function renderScreen(run) {
   const signal=signalsFor(run);
   for(const name of ["beep","field","delta","quality","note"]) $("signal-"+name).textContent=signal[name];
+  for(const zone of ["left","right"]) {
+    const value=run.diagnosis?.zones?.[zone]?.delta;
+    $("signal-"+zone).textContent=Number.isFinite(value)?`${value>0?"+":""}${value}`:"—";
+  }
   $("field-meter").hidden=signal.rms===null;
   if(signal.rms!==null) $("field-meter").value=signal.rms;
   $("signal-note").setAttribute("data-state",run.status);
@@ -231,7 +245,7 @@ function renderAction(run) {
   $("instruction").textContent = actionFor(run);
   if (state.demo && run.source === "mock" && TERMINAL.has(run.status)) {
     $("instruction").textContent = screenSummary(run).result;
-    $("phase-detail").textContent = "모의 입력 시연의 실행 결과입니다. 실제 인덕션 성능을 검증한 결과는 아닙니다.";
+    $("phase-detail").textContent = run.diagnosis?.next_action || "모의 입력 시연의 실행 결과입니다. 실제 인덕션 성능을 검증한 결과는 아닙니다.";
   }
 }
 function render(run, announce = true) {
@@ -311,6 +325,8 @@ function observationWarning(run) {
 }
 function renderDemo(info) {
   state.demoInfo = info;
+  $("response-label").textContent=info.scenario==="normal"?"정상":demoLabel(info.scenario);
+  if(!state.run && info.virtual_levels)for(const zone of ["left","right"])$("level-"+zone).textContent=String(info.virtual_levels[zone]);
   if(Object.hasOwn(info,"active_run_id")) {
     state.recoverRunId=info.active_run_id && info.active_run_id!==state.runId?info.active_run_id:null;
     if(state.recoverRunId) {
@@ -423,9 +439,10 @@ for (const zone of ["right", "left"]) {
     $("user-input").focus();
   });
 }
-$("settings-panel").addEventListener("toggle", () => { if ($("settings-panel").open) $("records-panel").open = false; });
-$("records-panel").addEventListener("toggle", () => { if ($("records-panel").open) $("settings-panel").open = false; });
-for(const panel of ["settings","records"]) $(panel+"-panel").addEventListener("keydown",event=>{
+$("settings-panel").addEventListener("toggle", () => { if ($("settings-panel").open) {$("records-panel").open = false;$("fault-panel").open=false;} });
+$("records-panel").addEventListener("toggle", () => { if ($("records-panel").open) {$("settings-panel").open = false;$("fault-panel").open=false;} });
+$("fault-panel").addEventListener("toggle",()=>{if($("fault-panel").open){$("settings-panel").open=false;$("records-panel").open=false;}});
+for(const panel of ["settings","records","fault"]) $(panel+"-panel").addEventListener("keydown",event=>{
   if(event.key==="Escape") {$(panel+"-panel").open=false;$(panel+"-toggle").focus();}
 });
 $("close-settings").addEventListener("click", () => { $("settings-panel").open = false; $("settings-toggle").focus(); });
@@ -495,7 +512,7 @@ $("goal-form").addEventListener("submit", event => {
     reads.invalidate();
     paintFlow(signalFlow.reset());
     for(const zone of ["left","right"]) $("level-"+zone).textContent="—";
-    for(const name of ["beep","field","delta"]) $("signal-"+name).textContent="—";
+    for(const name of ["beep","field","delta","left","right"]) $("signal-"+name).textContent="—";
     $("signal-quality").textContent="확인 전";
     $("signal-note").textContent="새 실행의 관측을 기다립니다.";
     $("field-meter").hidden=true;
@@ -525,6 +542,11 @@ $("goal-form").addEventListener("submit", event => {
     observationRequests.clear();
     if (!state.runId) throw new Error("서버가 실행 ID를 보내지 않았습니다.");
     state.run = null;
+    if(state.correctionDraft && request.user_input===state.correctionDraft.text && request.zone_id===state.correctionDraft.zone) {
+      state.returnGoal=state.correctionDraft.original;
+      state.correctionRunId=run.run_id;
+    } else {state.returnGoal=null;state.correctionRunId=null;}
+    state.correctionDraft=null;
     state.submittedRequest = request;
     $("origin").textContent = fixtureMode ? "UI FIXTURE · 서버 판정 없음" : "서버 상태 조회 중";
     $("mode").textContent = "실행 방식: 확인 전";
@@ -649,6 +671,43 @@ $("cancel").addEventListener("click", () => transact(async () => {
     $("user-input").focus();
   }
 }));
+$("apply-correction").addEventListener("click",()=>{
+  const c=state.run?.diagnosis?.correction;
+  if(!c || state.busy || state.demoUnverified || state.connection!=="online" || state.run.status!=="uncertain")return;
+  const text=`${c.zone_id==="left"?"왼쪽":"오른쪽"} 화력 한 단계 ${c.direction==="decrease"?"내려줘":"올려줘"}`;
+  state.correctionDraft={text,zone:c.zone_id,original:state.submittedRequest};
+  $("user-input").value=text;$("zone").value=c.zone_id;$("source").value="mock";
+  $("status").textContent="교정 목표를 확인한 뒤 안내 시작을 누르세요. 아직 새 실행은 시작하지 않았습니다.";
+  $("user-input").focus();
+});
+$("return-goal").addEventListener("click",()=>{
+  if(!state.returnGoal || state.busy || state.demoUnverified || state.connection!=="online" || state.recoverRunId || state.run?.status!=="succeeded" || state.correctionRunId!==state.runId)return;
+  const goal=state.returnGoal;state.returnGoal=null;state.correctionRunId=null;
+  $("user-input").value=goal.user_input;$("zone").value=goal.zone_id||"";$("source").value=goal.source;
+  $("status").textContent="원래 목표를 확인한 뒤 안내 시작을 누르세요. 자동으로 조작하거나 시작하지 않습니다.";
+  $("user-input").focus();controls();
+});
+$("reset-device").addEventListener("click",()=>{
+  if($("reset-device").disabled)return;
+  transact(async()=>{
+    let info;
+    try {info=await api.resetDevice();}catch(error){registerBusy(error);state.demoUnverified=true;markUnverified("초기화 결과를 확인하지 못했습니다. 시연 설정 다시 확인으로 장치 상태를 확인하세요.");return;}
+    reads.invalidate();stopPolling();observationRequests.clear();
+    state.run=null;state.runId=null;state.cancelRequestedRunId=null;state.submittedRequest=null;
+    state.connection="online";state.lastConfirmedAt=Date.now();
+    state.returnGoal=null;state.correctionRunId=null;state.correctionDraft=null;state.seen.clear();state.lastSpoken="";
+    if(speechAvailable)speechSynthesis.cancel();
+    paintFlow(signalFlow.reset());renderEvents([]);renderDemo(info);
+    for(const name of ["beep","field","delta","left","right"])$("signal-"+name).textContent="—";
+    $("signal-quality").textContent="확인 전";$("signal-note").textContent="초기화 후 새 관측을 기다립니다.";$("field-meter").hidden=true;
+    $("instruction").textContent="가상 화력을 5/5로 초기화했습니다. 새 목표를 입력하세요.";$("phase").textContent="새 요청 대기";
+    $("phase-detail").textContent="실물 상태를 초기화한 것이 아닙니다.";$("status").textContent="가상 장치 초기화 완료";
+    $("agent-trail").replaceChildren();$("result-summary").textContent="초기화 후 아직 판정이 없습니다.";
+    $("agent-stage").textContent="요청 대기";$("sensor-stage").textContent="관측 대기";$("agent-stage-detail").textContent="새 목표와 관측을 기다립니다.";
+    $("evidence-preview").hidden=true;$("evidence-json").textContent="";$("export-note").textContent="";
+    $("run-id").textContent="실행 ID: 없음";$("verdict").textContent="새 실행의 판정을 기다립니다.";
+  });
+});
 $("repeat").addEventListener("click", () => speak(state.lastSpoken));
 $("export-evidence").addEventListener("click", event => {
   if (!state.run?.run_id) { event.preventDefault(); return; }

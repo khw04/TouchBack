@@ -54,13 +54,13 @@ export function createSignalFlow() {
     const signal=signalsFor(run);
     const healthy=items.every(item=>item.device_observation.quality.status==="valid");
     const beepOk=healthy && items.every(item=>item.device_observation.beep_count!==null);
-    const fieldOk=healthy && items.every(item=>Boolean(item.device_observation.field_summary));
+    const fieldOk=healthy && items.every(item=>Boolean(item.device_observation.field_summary)) && (sim.observations.filter(item=>item.action_id===actionId).every(item=>item.device_observation.quality.status==="valid" && item.device_observation.field_summary));
     const moving=fresh && !reducedMotion && (beepOk || fieldOk);
     if(fresh)sequence++;
     view={phase:moving?"delivering":"received",sequence,
       beep:beepOk?(moving?"delivering":"received"):"warning",
       field:fieldOk?(moving?"delivering":"received"):"warning",
-      beepLabel:beepOk?signal.beep:"누락·품질 확인",fieldLabel:fieldOk?`Δ ${signal.delta}`:"누락·품질 확인",
+      beepLabel:beepOk?signal.beep:"누락·품질 확인",fieldLabel:fieldOk?(run.diagnosis?.zones?.left && run.diagnosis?.zones?.right?`좌 ${run.diagnosis.zones.left.delta} / 우 ${run.diagnosis.zones.right.delta}`:`Δ ${signal.delta}`):"누락·품질 확인",
       note:!beepOk || !fieldOk?"모의 관측 수신 · 누락/품질 이상, 성공 신호 아님":moving?"모의 관측 전달 중 · 변화 없음도 관측입니다.":"모의 관측 전달됨 · 성공 여부는 Agent 판정 확인"};
     return view;
   }

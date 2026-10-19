@@ -1099,3 +1099,47 @@ test('server restart during recovery allows a new start after metadata confirms 
   await app.el('recover-run').fire('click');assert.equal(app.el('start').disabled,false);assert.equal(app.el('recover-run').hidden,true);
  }finally{app.close();}
 });
+
+
+test('paired diagnostic exposes a correction draft and original goal only after explicit verified correction',async()=>{
+ const {loadApp,ok,demoMetadata,activeRun}=await import('./app-harness.mjs');let starts=0;
+ const make=()=>({...activeRun,run_id:'r'+starts,status:starts===1?'uncertain':'succeeded',instruction:null,
+ verdict:{status:starts===1?'uncertain':'success',verification_level:starts===1?'none':'exact_step',goal_satisfied:starts===1?null:true,reason_codes:[],evidence_ids:['b','p']},
+ diagnosis:{code:starts===1?'other_zone_changed':'goal_verified',message:starts===1?'왼쪽 출력 변화가 확인됐습니다.':'요청한 변화 확인',next_action:'상태를 확인하세요.',source:'mock',evidence_ids:['b','p'],zones:{left:{delta:starts===1?20:-20},right:{delta:0}},correction:starts===1?{zone_id:'left',direction:'decrease'}:null}});
+ const app=await loadApp(async(url,options)=>{
+  if(url==='/api/demo')return ok({...demoMetadata,virtual_cooktop:true});
+  if(url==='/api/runs'&&options.method==='POST')starts++;
+  return ok(make());
+ });
+ try{
+  await app.el('goal-form').fire('submit');assert.equal(app.el('apply-correction').hidden,false);assert.equal(app.el('signal-left').textContent,'+20');
+  await app.el('apply-correction').fire('click');assert.equal(starts,1);assert.match(app.el('user-input').value,/왼쪽.*내려/);
+  await app.el('goal-form').fire('submit');assert.equal(starts,2);assert.equal(app.el('return-goal').hidden,false);
+  await app.el('return-goal').fire('click');assert.equal(starts,2);assert.match(app.el('user-input').value,/오른쪽.*올려/);
+  await app.el('goal-form').fire('submit');assert.equal(starts,3);
+ }finally{app.close();}
+});
+
+test('device reset clears stale speech and evidence only after confirmed success',async()=>{
+ const {loadApp,ok,demoMetadata,activeRun}=await import('./app-harness.mjs');let resets=0;
+ const run={...activeRun,status:'uncertain',instruction:null};
+ const app=await loadApp(async(url)=>{
+  if(url==='/api/demo')return ok({...demoMetadata,virtual_cooktop:true});
+  if(url==='/api/demo/device/reset'){resets++;return ok({...demoMetadata,virtual_cooktop:true,virtual_levels:{left:5,right:5}});}
+  return ok(run);
+ });
+ try{
+  await app.el('goal-form').fire('submit');await app.el('reset-device').fire('click');
+  assert.equal(resets,1);assert.equal(app.el('level-left').textContent,'5');assert.equal(app.el('level-right').textContent,'5');
+  assert.equal(app.el('repeat').disabled,true);assert.equal(app.el('export-evidence').attributes.get('aria-disabled'),'true');assert.equal(app.el('agent-stage').textContent,'요청 대기');
+ }finally{app.close();}
+});
+
+test('lost reset response masks state and blocks new start instead of inventing reset levels',async()=>{
+ const {loadApp,ok,demoMetadata}=await import('./app-harness.mjs');
+ const app=await loadApp(async(url)=>{if(url==='/api/demo')return ok({...demoMetadata,virtual_cooktop:true,virtual_levels:{left:6,right:7}});throw new Error('lost');});
+ try{
+  await app.el('reset-device').fire('click');assert.equal(app.el('start').disabled,true);assert.equal(app.el('signal-flow').attributes.get('data-phase'),'blocked');
+  assert.equal(app.el('level-left').textContent,'6');assert.equal(app.el('level-right').textContent,'7');
+ }finally{app.close();}
+});

@@ -50,6 +50,7 @@ export function validateRun(data, expectedId) {
     invalid("실행 기록 형식이 다릅니다.");
   }
   if(data.diagnosis!=null && (!record(data.diagnosis) || data.source!=="mock" || data.diagnosis.source!=="mock" || !filled(data.diagnosis.code) || !filled(data.diagnosis.message) || !filled(data.diagnosis.next_action) || !Array.isArray(data.diagnosis.evidence_ids) || !record(data.diagnosis.zones)))invalid("관측 진단 형식이 다릅니다.");
+  if(data.diagnosis?.correction!=null && (!record(data.diagnosis.correction) || !["left","right"].includes(data.diagnosis.correction.zone_id) || !["increase","decrease"].includes(data.diagnosis.correction.direction)))invalid("교정 제안 형식이 다릅니다.");
   if (data.simulation != null) {
     const sim=data.simulation;
     if(data.source!=="mock" || !record(sim) || sim.kind!=="virtual_cooktop" || !record(sim.levels) ||
@@ -77,6 +78,7 @@ export function validateRun(data, expectedId) {
 
 export function validateDemoMetadata(data) {
   if (!record(data) || typeof data.enabled !== "boolean") invalid("모의 입력 설정 형식이 다릅니다.");
+  if(data.virtual_levels!=null && (!record(data.virtual_levels) || ![data.virtual_levels.left,data.virtual_levels.right].every(v=>Number.isInteger(v)&&v>=0&&v<=9)))invalid("가상 장치 상태가 유효하지 않습니다.");
   if (data.active_run_id != null && !filled(data.active_run_id)) invalid("진행 중인 실행 ID가 유효하지 않습니다.");
   if (!data.enabled) {
     if (data.manageable !== true) return { enabled: false };
@@ -132,6 +134,7 @@ export function createApi(baseUrl = "", fetchImpl = fetch, { timeoutMs = 15000 }
     finally { clearTimeout(timer); }
   }
   return {
+    resetDevice: async () => validateDemoMetadata(await request("/api/demo/device/reset","POST")),
     demoInfo: async () => validateDemoMetadata(await request("/api/demo")),
     configureDemo: async scenario => validateDemoMetadata(await request("/api/demo/scenario", "POST", { scenario })),
     configureDemoSettings: async (execution_mode, scenario) => validateDemoMetadata(await request("/api/demo/settings", "POST", {execution_mode, scenario})),
