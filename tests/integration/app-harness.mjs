@@ -18,15 +18,16 @@ export async function loadApp(fetchImpl, search = '', {speechSupported = true} =
     append(...children) { this.children.push(...children); }
     replaceChildren(...children) { this.children = children; }
     focus() {}
-    async fire(name) {
-      await this.listeners.get(name)?.({preventDefault(){},currentTarget:this});
+    requestSubmit(){return this.fire("submit");}
+    async fire(name, extra = {}) {
+      await this.listeners.get(name)?.({preventDefault(){},currentTarget:this,...extra});
       await flush();
     }
   }
   const nodes = new Map();
   const el = id => { if (!nodes.has(id)) nodes.set(id,new Element(id)); return nodes.get(id); };
   el('user-input').value = '오른쪽 화구 화력을 한 단계 올려줘';
-  el('source').value = 'mock'; el('zone').value = 'right'; el('auto-speech').checked = true;
+  el('source').value = 'mock'; el('zone').value = ''; el('auto-speech').checked = true;
   el('demo-controls').hidden = true;
   Object.assign(globalThis, {
     document:{getElementById:el,createElement:()=>new Element(),documentElement:{classList:{toggle(){return true;}}}},

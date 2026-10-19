@@ -1,5 +1,5 @@
 // Plain-language summaries of server state; never infer sensor measurements.
-import { claimableSuccess } from "./presentation.mjs?v=19";
+import { claimableSuccess } from "./presentation.mjs?v=20";
 const reasons = {
   sensor_adapter_unconfigured: "센서 입력이 설정되지 않아 변화를 확인할 수 없어요.",
   sensor_integrity_check_failed: "센서 사전 점검을 통과하지 못해 조작을 중단했어요.",
@@ -16,7 +16,7 @@ const reasons = {
 export function screenSummary(run) {
   if (!run) return {agent:"요청 대기",sensor:"관측 대기",detail:"서버가 확인한 진행 상태만 표시합니다.",result:"아직 판정이 없습니다."};
   const status=run.status;
-  const result=run.verdict?.reason_codes?.map(code=>reasons[code]).find(Boolean);
+  const result=!["stopped","failed"].includes(status) && run.verdict?.reason_codes?.map(code=>reasons[code]).find(Boolean);
   const count=Array.isArray(run.verdict?.evidence_ids)?run.verdict.evidence_ids.length:0;
   const agent=({planning:"목표와 계획 확인 중",awaiting_clarification:"요청 확인이 필요해요",awaiting_user:"조작 안내 준비됨",observing:"관측과 목표 비교 중",recovering:"재안내 조건 확인 중",succeeded:"판정 완료",uncertain:"확인할 근거가 부족해요",failed:"실행을 완료하지 못했어요",stopped:"실행을 중단했어요"})[status]||"상태 확인 중";
   const sensor=status==="observing"?"관측 처리 중":status==="recovering"?"지연 관측 확인 중":count?`판정 근거 ${count}건`:"수신 수치 확인 전";
