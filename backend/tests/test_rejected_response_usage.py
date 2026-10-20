@@ -10,6 +10,7 @@ from app.main import app
 
 @pytest.mark.parametrize("choices", [[],[None],[{"message":None}],[{"message":{},"finish_reason":"stop"}]])
 def test_invalid_choices_preserve_reported_usage_without_an_instruction(choices,monkeypatch):
+    monkeypatch.setattr(settings,"llm_provider","openai")
     monkeypatch.setattr(settings,"execution_mode","real_llm")
     monkeypatch.setattr(settings,"openai_api_key","dummy-offline-key")
     response=httpx.Response(200,request=httpx.Request("POST","https://api.openai.com/v1/chat/completions"),json={

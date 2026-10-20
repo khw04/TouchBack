@@ -352,7 +352,7 @@ function renderDemo(info) {
   }
   $("demo-execution-mode").value = ["mock_llm", "real_llm"].includes(info.execution_mode) ? info.execution_mode : "mock_llm";
   $("real-mode-option").disabled = info.api_key_configured === false;
-  $("api-readiness").textContent = info.api_key_configured ? `API 키 설정됨 · 모델 ${info.model || "서버 설정"}. 실제 호출 성공은 실행 기록에서 확인하세요.` : "실제 AI 키 미설정 · 서버 .env에 키를 넣고 재시작하세요. 지금은 Mock LLM으로 연습할 수 있습니다.";
+  $("api-readiness").textContent = info.api_key_configured ? `API 키 설정됨 · ${info.provider === "anthropic" ? "Claude" : "OpenAI"} · 모델 ${info.model || "서버 설정"}. 실제 호출 성공은 실행 기록에서 확인하세요.` : "실제 AI 키 미설정 · 서버 .env에 키를 넣고 재시작하세요. 지금은 Mock LLM으로 연습할 수 있습니다.";
   if (info.manageable) {
     $("source").value = "mock"; $("source").disabled = true;
     $("demo-scenario").replaceChildren(...info.scenarios.map(name => {const option=document.createElement("option"); option.value=name; option.textContent=demoLabel(name); return option;}));

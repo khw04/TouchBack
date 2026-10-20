@@ -37,7 +37,10 @@ def load_env_file(filepath: Path) -> dict[str, str]:
 
 
 class Settings(BaseModel):
-    openai_api_key: str = Field(default="")
+    llm_provider: Literal["anthropic", "openai"] = "anthropic"
+    anthropic_api_key: str = Field(default="", repr=False)
+    claude_model: str = "claude-haiku-5-5"
+    openai_api_key: str = Field(default="", repr=False)
     openai_model: str = Field(default="gpt-6-luna")
     openai_reasoning_effort: str = Field(default="low")
     execution_mode: ExecutionMode = Field(default="backend_stub")
@@ -67,6 +70,9 @@ class Settings(BaseModel):
             raise ValueError("TOUCHBACK_DEMO_ENABLED must be true/false or 1/0")
         scenario = os.environ.get("TOUCHBACK_MOCK_SCENARIO", env_vars.get("TOUCHBACK_MOCK_SCENARIO", "normal"))
         return cls(
+            llm_provider=os.environ.get("TOUCHBACK_LLM_PROVIDER", env_vars.get("TOUCHBACK_LLM_PROVIDER", "anthropic")),
+            anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY", env_vars.get("ANTHROPIC_API_KEY", "")),
+            claude_model=os.environ.get("CLAUDE_MODEL", env_vars.get("CLAUDE_MODEL", "claude-haiku-5-5")),
             demo_enabled=demo in ("true", "1"),
             mock_scenario=scenario,
             openai_api_key=api_key,
@@ -75,6 +81,14 @@ class Settings(BaseModel):
             execution_mode=mode,  # type: ignore[arg-type]
             repo_root=root,
         )
+
+    @property
+    def model_name(self) -> str:
+        return self.claude_model if self.llm_provider == "anthropic" else self.openai_model
+
+    def is_llm_configured(self) -> bool:
+        key = self.anthropic_api_key if self.llm_provider == "anthropic" else self.openai_api_key
+        return bool(key.strip())
 
     def is_openai_configured(self) -> bool:
         return bool(self.openai_api_key and self.openai_api_key.strip())

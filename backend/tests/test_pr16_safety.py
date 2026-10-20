@@ -28,6 +28,7 @@ RETRY = "오른쪽 화구의 + 버튼을 다시 한 번 눌러 주세요."
 @pytest.fixture(autouse=True)
 def isolate(monkeypatch):
     run_store.reset()
+    monkeypatch.setattr(settings, "llm_provider", "openai")
     monkeypatch.setattr(settings, "execution_mode", "mock_llm")
     monkeypatch.setattr(settings, "openai_api_key", "sk-fake-offline-test")
     # Any accidentally unmocked product request must fail, never use the network.

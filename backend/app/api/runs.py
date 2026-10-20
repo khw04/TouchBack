@@ -240,7 +240,7 @@ class RunStore:
                     self._check_and_expire(current, self._now_utc())
                     if current.status not in TERMINAL_STATUSES:
                         raise RunApiException(409, "busy", "실행 종료 후 시연 설정을 변경하세요.", active_run_id=current.run_id)
-            if mode == "real_llm" and not settings.is_openai_configured():
+            if mode == "real_llm" and not settings.is_llm_configured():
                 raise RunApiException(422, "validation", "실제 AI를 사용하려면 서버 .env에 API 키를 설정하고 서버를 다시 시작하세요.")
             settings.execution_mode = mode
             settings.mock_scenario = scenario
@@ -290,7 +290,7 @@ class RunStore:
             exec_mode: ExecutionMode = settings.execution_mode
 
             # real_llm 모드에서 API 키가 누락된 경우 명시적 오류/대기 처리 (모의 모델로 속이지 않음)
-            if exec_mode == "real_llm" and not settings.openai_api_key.strip():
+            if exec_mode == "real_llm" and not settings.is_llm_configured():
                 state = RunState(
                     run_id=run_id,
                     status="failed",
@@ -314,7 +314,7 @@ class RunStore:
                 self._add_event(
                     state,
                     kind="error",
-                    message="OPENAI_API_KEY가 설정되지 않아 실제 LLM을 호출할 수 없습니다 (provider_waiting). 환경설정을 확인해 주세요.",
+                    message="선택한 모델 업체의 API 키가 설정되지 않아 실제 LLM을 호출할 수 없습니다 (provider_waiting). 환경설정을 확인해 주세요.",
                 )
                 self._runs[run_id] = state
                 self._active_run_id = None
@@ -779,13 +779,38 @@ class RunStore:
                 valid = current and current.status == "observing" and current.generation == expected_generation
             if not valid:
                 return verdict, feedback, None
-            if orch.determine_next_status(verdict) == "recovering":
+            if state.execution_mode == "real_llm":
+                from app.agent.decision_loop import decide_after_observation
+                def is_current():
+                    with self._lock:
+                        self._check_and_expire(state, self._now_utc())
+                        return state.status == "observing" and state.generation == expected_generation and self._active_run_id == run_id
+                def record_tool_fact(call):
+                    # A completed Tool is an audit fact, independent of later model/state failure.
+                    # This worker owns each callback once; duplicate step never starts a worker.
+                    with self._lock:
+                        current = self._runs.get(run_id)
+                        if current is state:
+                            succeeded = call["result"]["success"]
+                            choice = call["result"].get("data", {}).get("action", "")
+                            self._add_event(current, "tool_call", f"관측 Agent Tool '{call['name']}' {'완료' if succeeded else '안전 차단'} {choice}", action_id)
+                try:
+                    verdict, feedback, recovery = await decide_after_observation(
+                        orch, goal=goal, verdict=verdict, feedback=feedback, retry_count=retry_count,
+                        run_id=run_id, action_id=action_id, window_start_ms=window_start_ms,
+                        window_end_ms=window_end_ms, is_current=is_current, on_tool_executed=record_tool_fact)
+                except FATAL_LLM_ERRORS as exc:
+                    recovery_llm_error = exc
+                    raise
+            elif orch.determine_next_status(verdict) == "recovering":
+                # Offline contract rehearsal keeps its explicitly scripted Mock behavior.
                 recovery = orch.handle_recovery(
                     goal=goal, verdict=verdict, retry_count=retry_count,
                     run_id=run_id, action_id=action_id,
                     window_start_ms=window_start_ms, window_end_ms=window_end_ms,
                 )
-                if recovery.decision.value == "retry_instruction":
+            if recovery is not None and recovery.decision.value == "retry_instruction":
+                if state.execution_mode != "real_llm":
                     try:
                         inst, plan_msg = await orch.replan_recovery_with_llm(goal, recovery)
                     except FATAL_LLM_ERRORS as exc:
@@ -794,20 +819,20 @@ class RunStore:
                     recovery.instruction = inst
                     recovery.message = inst.text if inst else ""
                     recovery.plan_message = plan_msg
-                    registry = create_registry_from_adapter(
-                        orch.adapter, source=state.source, run_id=run_id,
-                        zone_id=goal.zone_id, for_planning=True,
-                        calibration=orch.verifier.get_calibration_for_zone(goal.zone_id),
+                registry = create_registry_from_adapter(
+                    orch.adapter, source=state.source, run_id=run_id,
+                    zone_id=goal.zone_id, for_planning=True,
+                    calibration=orch.verifier.get_calibration_for_zone(goal.zone_id),
+                )
+                recovery_checks = await required_preflight(registry, goal.zone_id)
+                if any(not call["result"]["success"] for call in recovery_checks):
+                    recovery.decision = RecoveryDecisionType.ABORT_UNCERTAIN
+                    recovery.instruction = None
+                    recovery.message = "센서 사전 점검에서 이상이 감지되었습니다. 추가 조작을 중단합니다."
+                    recovery.updated_verdict = Verdict(
+                        status="uncertain", verification_level="none", goal_satisfied=None,
+                        reason_codes=["sensor_integrity_check_failed"], evidence_ids=verdict.evidence_ids,
                     )
-                    recovery_checks = await required_preflight(registry, goal.zone_id)
-                    if any(not call["result"]["success"] for call in recovery_checks):
-                        recovery.decision = RecoveryDecisionType.ABORT_UNCERTAIN
-                        recovery.instruction = None
-                        recovery.message = "센서 사전 점검에서 이상이 감지되었습니다. 추가 조작을 중단합니다."
-                        recovery.updated_verdict = Verdict(
-                            status="uncertain", verification_level="none", goal_satisfied=None,
-                            reason_codes=["sensor_integrity_check_failed"], evidence_ids=verdict.evidence_ids,
-                        )
             return verdict, feedback, recovery
 
         async def collect():
@@ -881,6 +906,8 @@ class RunStore:
             now = self._now_utc()
             current_state.verdict = verdict
             current_state.diagnosis = orch.diagnosis
+            if getattr(orch, "agent_choice", None):
+                self._add_event(current_state, "plan", f"Agent 다음 행동 선택: {orch.agent_choice}", action_id, evidence_ids=verdict.evidence_ids)
             next_status = orch.determine_next_status(verdict)
             for call in recovery_checks:
                 result = call["result"]
