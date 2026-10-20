@@ -1,11 +1,12 @@
-import { demoLabel, demoControlsDisabled } from "./demo.mjs?v=18";
-import { createApi, freshSpeechItems, TERMINAL } from "./api.mjs?v=18";
-import { createFixture } from "./fixtures.mjs?v=18";
-import { actionFor, claimableSuccess, phaseFor, unverifiedSnapshot, verdictLabel } from "./presentation.mjs?v=18";
-import { eventChange, eventLabel, eventSource } from "./events.mjs?v=18";
-import { canSendAction, connectionLabel } from "./connection.mjs?v=18";
-import { evidenceReport, evidenceFilename } from "./evidence.mjs?v=18";
-import { createReadGate, regressesTerminalState } from "./read-gate.mjs?v=18";
+import { screenSummary } from "./screen.mjs?v=19";
+import { demoLabel, demoControlsDisabled } from "./demo.mjs?v=19";
+import { createApi, freshSpeechItems, TERMINAL } from "./api.mjs?v=19";
+import { createFixture } from "./fixtures.mjs?v=19";
+import { actionFor, claimableSuccess, phaseFor, unverifiedSnapshot, verdictLabel } from "./presentation.mjs?v=19";
+import { eventChange, eventLabel, eventSource } from "./events.mjs?v=19";
+import { canSendAction, connectionLabel } from "./connection.mjs?v=19";
+import { evidenceReport, evidenceFilename } from "./evidence.mjs?v=19";
+import { createReadGate, regressesTerminalState } from "./read-gate.mjs?v=19";
 
 const $ = id => document.getElementById(id);
 const params = new URLSearchParams(location.search);
@@ -35,6 +36,9 @@ $("resume-form").hidden = fixtureMode;
 
 function controls() {
   const run = state.run;
+  const cannotEdit = state.busy || state.startUnknown || Boolean(run && !TERMINAL.has(run.status));
+  $("preset-right").disabled = cannotEdit;
+  $("preset-left").disabled = cannotEdit;
   $("demo-apply").disabled = !state.demo || demoControlsDisabled(state);
   $("demo-scenario").disabled = !state.demo || demoControlsDisabled(state);
   $("demo-reload").disabled = state.busy || state.demoLoading;
@@ -88,6 +92,10 @@ function maskUnverifiedSnapshot() {
   $("phase-detail").textContent = snapshot.detail;
   $("instruction").textContent = snapshot.action;
   $("verdict").textContent = snapshot.verdict;
+  $("agent-stage").textContent = "현재 상태 확인 필요";
+  $("sensor-stage").textContent = "현재 관측 확인 불가";
+  $("agent-stage-detail").textContent = "상태 다시 확인이 성공할 때까지 이전 결과를 현재 결과로 사용하지 마세요.";
+  $("result-summary").textContent = snapshot.verdict;
 }
 
 function showError(message) {
@@ -135,10 +143,22 @@ function renderEvents(items) {
   }
   state.renderedEventIds = change.ids;
 }
+function renderScreen(run) {
+  const summary = screenSummary(run);
+  const blocked = state.demoUnverified || cancellingCurrentRun() && !TERMINAL.has(run.status);
+  $("agent-stage").textContent = blocked ? "조작 안내 보류 중" : summary.agent;
+  $("sensor-stage").textContent = blocked ? "상태 확인 대기" : summary.sensor;
+  $("agent-stage-detail").textContent = summary.detail;
+  $("result-summary").textContent = blocked ? "현재 설정·취소 결과를 확인한 뒤 판정을 확인하세요." : summary.result;
+  $("screen-mode").textContent = modeText[run.execution_mode] || "모델 확인 전";
+  $("screen-source").textContent = run.execution_mode === "ui_fixture" ? "화면 연습 · 서버 판정 없음" : `${sourceText[run.source] || "입력 미확인"} · 실물 미검증`;
+}
 function renderAction(run) {
+  renderScreen(run);
   if (cancellingCurrentRun()) {
     state.lastSpoken = "";
     if (speechAvailable) speechSynthesis.cancel();
+    renderScreen(run);
     if (!TERMINAL.has(run.status)) {
       $("phase").textContent = "취소 요청 확인 중";
       $("phase-detail").textContent = "추가 조작을 멈추세요. 서버의 취소 결과를 확인하고 있습니다.";
@@ -159,6 +179,10 @@ function renderAction(run) {
   $("phase-detail").textContent = state.demo && run.source === "mock" && run.status === "awaiting_user"
     ? "실물은 조작하지 말고, 안내를 확인한 뒤 완료 알림을 눌러 모의 관측을 진행하세요." : detail;
   $("instruction").textContent = actionFor(run);
+  if (state.demo && run.source === "mock" && TERMINAL.has(run.status)) {
+    $("instruction").textContent = screenSummary(run).result;
+    $("phase-detail").textContent = "모의 입력 시연의 실행 결과입니다. 실제 인덕션 성능을 검증한 결과는 아닙니다.";
+  }
 }
 function render(run, announce = true) {
   const previousAction = state.run?.status === "awaiting_user" ? state.run.instruction?.action_id : null;
@@ -187,6 +211,7 @@ function render(run, announce = true) {
   $("verdict").textContent = verdictLabel(run);
   const items = Array.isArray(run.events) ? run.events : [];
   renderEvents(items);
+  renderScreen(run);
   const speech = state.demoUnverified || cancellingCurrentRun() ? { ids: [], messages: [] } : freshSpeechItems(state.seen, run, claimableSuccess(run));
   speech.ids.forEach(id => state.seen.add(id));
   if (speech.messages.length) {
@@ -236,10 +261,13 @@ function observationWarning(run) {
 function renderDemo(info) {
   state.demo = info.enabled ? info : null;
   state.demoUnverified = false;
+  $("screen-mode").textContent = info.enabled ? modeText[info.execution_mode] : "시연 모드 꺼짐";
+  $("screen-source").textContent = info.enabled ? "모의 센서 · 실물 미검증" : "입력 출처는 시연 설정에서 확인";
   $("demo-controls").hidden = !info.enabled;
   if (info.enabled) {
     $("page-title").textContent = "센서 없는 Agent 시연";
     $("page-description").textContent = "Mock 관측을 실제 실행 API와 검증·복구 Skill로 처리합니다. 실제 센서 측정이나 실물 성능 검증이 아닙니다.";
+    $("ack").textContent = "모의 조작 확인";
     $("demo-mode").textContent = `서버 설정: ${modeText[info.execution_mode]} · 입력: 모의 관측 · 실물 미검증`;
     $("source").value = "mock";
     $("source").disabled = true;
@@ -251,6 +279,7 @@ function renderDemo(info) {
     $("demo-status").textContent = `적용된 모의 입력: ${demoLabel(info.scenario)}. 실행 중에는 변경할 수 없습니다.`;
   } else {
     $("source").disabled = false;
+    $("ack").textContent = "조작 완료 알림";
     $("page-title").textContent = "조작한 뒤, 실제 결과를 확인하세요";
     $("page-description").textContent = "사용자가 직접 인덕션을 조작합니다. 화면은 서버가 보고한 안내와 관측 결과를 보여줍니다.";
     $("observation-hint").textContent = "조작 완료 알림은 성공 판정이 아닙니다. 센서 관측과 서버 판정을 기다리세요.";
@@ -274,6 +303,8 @@ async function loadDemo() {
   try { renderDemo(await api.demoInfo()); }
   catch {
     $("demo-controls").hidden = false;
+    $("settings-panel").open = true;
+    $("screen-mode").textContent = "설정 확인 실패";
     $("demo-status").textContent = "시연 설정을 확인하지 못했습니다. 시연 설정 다시 확인을 누른 뒤 실행하세요.";
   } finally {
     state.demoLoading = false;
@@ -291,6 +322,18 @@ $("demo-apply").addEventListener("click", () => {
     }
   });
 });
+for (const zone of ["right", "left"]) {
+  $("preset-" + zone).addEventListener("click", () => {
+    if (state.busy || state.startUnknown || state.run && !TERMINAL.has(state.run.status)) return;
+    $("zone").value = zone;
+    $("user-input").value = `${zone === "right" ? "오른쪽" : "왼쪽"} 화구 화력을 한 단계 올려줘`;
+    $("user-input").focus();
+  });
+}
+$("settings-panel").addEventListener("toggle", () => { if ($("settings-panel").open) $("records-panel").open = false; });
+$("records-panel").addEventListener("toggle", () => { if ($("records-panel").open) $("settings-panel").open = false; });
+$("close-settings").addEventListener("click", () => { $("settings-panel").open = false; $("settings-toggle").focus(); });
+$("close-records").addEventListener("click", () => { $("records-panel").open = false; $("records-toggle").focus(); });
 $("demo-reload").addEventListener("click", () => transact(loadDemo));
 function stopPolling() { if (state.polling) clearInterval(state.polling); state.polling = null; }
 async function refresh(allowBusy = false) {
@@ -370,6 +413,9 @@ $("goal-form").addEventListener("submit", event => {
     $("instruction").textContent = "서버의 안내를 기다리세요.";
     $("phase-detail").textContent = "조회가 실패하면 상태 다시 확인을 누르세요.";
     $("verdict").textContent = "서버 판정을 기다리는 중입니다.";
+    $("sensor-stage").textContent = "관측 대기";
+    $("agent-stage").textContent = "서버 응답 확인 중";
+    $("result-summary").textContent = "새 실행의 판정을 기다립니다.";
     $("evidence-preview").hidden = true;
     $("evidence-preview").open = false;
     $("evidence-json").textContent = "";
@@ -479,7 +525,12 @@ $("retry").addEventListener("click", async () => {
 });
 $("speech-support").textContent = speechAvailable ? "음성 안내 사용 가능. 안내 다시 듣기 버튼을 사용할 수 있습니다." : "이 브라우저는 음성 안내를 지원하지 않습니다. 화면의 안내 문구를 확인하세요.";
 if (!speechAvailable) { $("auto-speech").checked = false; $("auto-speech").disabled = true; }
-if (fixtureMode) $("origin").textContent = "UI FIXTURE · 서버 판정 없음";
+if (fixtureMode) {
+  $("origin").textContent = "UI FIXTURE · 서버 판정 없음";
+  $("screen-mode").textContent = "UI 화면 예시";
+  $("screen-source").textContent = "화면 연습 · 서버 판정 없음";
+  $("page-title").textContent = "화면 연습";
+}
 showConnection();
 controls();
 
