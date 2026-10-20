@@ -1,0 +1,120 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1140" viewBox="0 0 1600 1140" role="img" aria-labelledby="title desc">
+<title id="title">TouchBack 실물 관측 회로 구상과 현재 Mock 경로</title>
+<desc id="desc">외부 좌우 코일을 아날로그 처리한 후 ADS1115와 ESP32로 수집하고, INMP441은 I2S로 ESP32에 연결하는 실물 구상. 현재는 Mock 관측을 서버 Claude Agent에 제공한다.</desc>
+<style>text{font-family:'Malgun Gothic','Noto Sans KR',sans-serif;fill:#172d32}.title{font-size:42px;font-weight:700}.sub{font-size:22px;fill:#51696e}.name{font-size:29px;font-weight:700}.body{font-size:22px}.small{font-size:19px;fill:#51696e}.tag{font-size:18px;font-weight:700;fill:#126854}.white{fill:#fff}.label{font-size:22px;font-weight:700}.tiny{font-size:17px;fill:#51696e}</style>
+<rect x="0" y="0" width="1600" height="1140" rx="0" fill="#f3f8f5" stroke="none"/>
+<defs>
+<marker id="plan" markerWidth="9" markerHeight="9" refX="8" refY="4" orient="auto">
+<path d="M0 0L8 4L0 8" fill="none" stroke="#b87b27" stroke-width="1.8"/>
+</marker>
+<marker id="now" markerWidth="9" markerHeight="9" refX="8" refY="4" orient="auto">
+<path d="M0 0L8 4L0 8" fill="none" stroke="#127b65" stroke-width="1.8"/>
+</marker>
+</defs>
+<text x="40" y="65" class="title" >센서 신호가 Agent에 도착하기까지</text>
+<text x="40" y="107" class="sub" >실물 연결 구상과 현재 센서 없는 시연을 분리한 블록 구성도 · 핀 배선도 아님</text>
+<rect x="40" y="155" width="300" height="380" rx="20" fill="#fff" stroke="#d8e5e2"/>
+<text x="62" y="193" class="tag" >01</text>
+<text x="62" y="233" class="name" >외부 픽업 코일</text>
+<rect x="400" y="155" width="370" height="380" rx="20" fill="#fff" stroke="#d8e5e2"/>
+<text x="422" y="193" class="tag" >02</text>
+<text x="422" y="233" class="name" >아날로그 처리 회로</text>
+<rect x="830" y="155" width="250" height="380" rx="20" fill="#fff" stroke="#d8e5e2"/>
+<text x="852" y="193" class="tag" >03</text>
+<text x="852" y="233" class="name" >ADC 수집</text>
+<rect x="1140" y="155" width="420" height="380" rx="20" fill="#fff" stroke="#d8e5e2"/>
+<text x="1162" y="193" class="tag" >04</text>
+<text x="1162" y="233" class="name" >요약·전송</text>
+<rect x="65" y="265" width="250" height="83" rx="12" fill="#fcf7ec" stroke="#e1d3b3"/>
+<g transform="translate(76 263)">
+<ellipse cx="44" cy="43" rx="34" ry="23.799999999999997" fill="none" stroke="#b66c3c" stroke-width="5"/>
+<ellipse cx="44" cy="43" rx="26" ry="18.2" fill="none" stroke="#b66c3c" stroke-width="5"/>
+<ellipse cx="44" cy="43" rx="18" ry="12.6" fill="none" stroke="#b66c3c" stroke-width="5"/>
+<ellipse cx="44" cy="43" rx="10" ry="7.0" fill="none" stroke="#b66c3c" stroke-width="5"/>
+<path d="M10 43 L0 76" fill="none" stroke="#b66c3c" stroke-width="4" />
+<path d="M78 43 L90 76" fill="none" stroke="#b66c3c" stroke-width="4" />
+</g>
+<text x="180" y="313" class="label" >왼쪽 코일</text>
+<rect x="65" y="390" width="250" height="83" rx="12" fill="#fcf7ec" stroke="#e1d3b3"/>
+<g transform="translate(76 388)">
+<ellipse cx="44" cy="43" rx="34" ry="23.799999999999997" fill="none" stroke="#b66c3c" stroke-width="5"/>
+<ellipse cx="44" cy="43" rx="26" ry="18.2" fill="none" stroke="#b66c3c" stroke-width="5"/>
+<ellipse cx="44" cy="43" rx="18" ry="12.6" fill="none" stroke="#b66c3c" stroke-width="5"/>
+<ellipse cx="44" cy="43" rx="10" ry="7.0" fill="none" stroke="#b66c3c" stroke-width="5"/>
+<path d="M10 43 L0 76" fill="none" stroke="#b66c3c" stroke-width="4" />
+<path d="M78 43 L90 76" fill="none" stroke="#b66c3c" stroke-width="4" />
+</g>
+<text x="180" y="438" class="label" >오른쪽 코일</text>
+<rect x="425" y="265" width="320" height="83" rx="12" fill="#fcf7ec" stroke="#e1d3b3"/>
+<text x="445" y="297" class="tag" >왼쪽 채널</text>
+<text x="445" y="327" class="label" >LM358 + 신호 처리</text>
+<rect x="425" y="390" width="320" height="83" rx="12" fill="#fcf7ec" stroke="#e1d3b3"/>
+<text x="445" y="422" class="tag" >오른쪽 채널</text>
+<text x="445" y="452" class="label" >LM358 + 신호 처리</text>
+<text x="425" y="506" class="small" >정류·필터·입력 보호 구성은 검증 전</text>
+<text x="65" y="506" class="tiny" >인덕션 내부를 개조하지 않는 구상</text>
+<rect x="853" y="267" width="204" height="207" rx="14" fill="#ecf4fb" stroke="#cfdfeb"/>
+<g transform="translate(908 285)">
+<rect x="0" y="9" width="91" height="72" rx="9" fill="#3679a6" stroke="none"/>
+<circle cx="9" cy="73" r="4" fill="#edc36b"/>
+<circle cx="29" cy="73" r="4" fill="#edc36b"/>
+<circle cx="49" cy="73" r="4" fill="#edc36b"/>
+<circle cx="69" cy="73" r="4" fill="#edc36b"/>
+<rect x="22" y="25" width="49" height="29" rx="3" fill="#183335" stroke="none"/>
+<text x="46" y="44" class="tiny" text-anchor="middle" style="fill:white;font-size:14px">ADC</text>
+<path d="M16 29 L22 29" fill="none" stroke="#c7cfce" stroke-width="3" />
+<path d="M71 29 L77 29" fill="none" stroke="#c7cfce" stroke-width="3" />
+<path d="M16 39 L22 39" fill="none" stroke="#c7cfce" stroke-width="3" />
+<path d="M71 39 L77 39" fill="none" stroke="#c7cfce" stroke-width="3" />
+<path d="M16 49 L22 49" fill="none" stroke="#c7cfce" stroke-width="3" />
+<path d="M71 49 L77 49" fill="none" stroke="#c7cfce" stroke-width="3" />
+</g>
+<text x="955" y="408" class="name" text-anchor="middle">ADS1115</text>
+<text x="955" y="445" class="small" text-anchor="middle">좌우 두 채널</text>
+<rect x="1165" y="270" width="370" height="173" rx="14" fill="#223b40" stroke="none"/>
+<text x="1191" y="315" class="name" style="fill:#fff">ESP32</text>
+<text x="1191" y="356" class="body" style="fill:#e5eeeb">비프음·출력 변화 요약</text>
+<text x="1191" y="393" class="small" style="fill:#c2d7d2">보유/보드·핀맵 확인 필요</text>
+<text x="1165" y="502" class="small" >Agent에는 관측·품질·시간을 전달</text>
+<path d="M315 306 L421 306" fill="none" stroke="#b87b27" stroke-width="4" stroke-dasharray="9 7" marker-end="url(#plan)"/>
+<path d="M745 306 L849 306" fill="none" stroke="#b87b27" stroke-width="4" stroke-dasharray="9 7" marker-end="url(#plan)"/>
+<path d="M315 431 L421 431" fill="none" stroke="#b87b27" stroke-width="4" stroke-dasharray="9 7" marker-end="url(#plan)"/>
+<path d="M745 431 L849 431" fill="none" stroke="#b87b27" stroke-width="4" stroke-dasharray="9 7" marker-end="url(#plan)"/>
+<path d="M1057 354 L1161 354" fill="none" stroke="#b87b27" stroke-width="4" stroke-dasharray="9 7" marker-end="url(#plan)"/>
+<text x="1105" y="331" class="tag" text-anchor="middle">I2C</text>
+<rect x="40" y="574" width="430" height="123" rx="20" fill="#fff" stroke="#d8e5e2"/>
+<g transform="translate(64 589)">
+<rect x="0" y="9" width="91" height="72" rx="9" fill="#3679a6" stroke="none"/>
+<circle cx="9" cy="73" r="4" fill="#edc36b"/>
+<circle cx="29" cy="73" r="4" fill="#edc36b"/>
+<circle cx="49" cy="73" r="4" fill="#edc36b"/>
+<circle cx="69" cy="73" r="4" fill="#edc36b"/>
+<circle cx="46" cy="39" r="18" fill="#cdd8d5"/>
+<circle cx="46" cy="39" r="6" fill="#172d32"/>
+</g>
+<text x="181" y="622" class="name" >INMP441 · ビ프음</text>
+<text x="181" y="663" class="small" >음성 명령용 PC 마이크와 별개</text>
+<path d="M470 633H1345V448" fill="none" stroke="#b87b27" stroke-width="4" stroke-dasharray="9 7" marker-end="url(#plan)"/>
+<text x="735" y="616" class="small" >I2S · 비프음 단서 수집</text>
+<rect x="40" y="755" width="700" height="153" rx="18" fill="#e6f3eb" stroke="#9bc6b5"/>
+<text x="65" y="796" class="name" >현재 구현 · 센서 없는 시연</text>
+<text x="65" y="838" class="body" >가상 인덕션 → 좌우 출력 변화·비프음 Mock 관측</text>
+<text x="65" y="879" class="small" >가상 화력·누른 버튼 정답을 Agent에 직접 전달하지 않음</text>
+<rect x="845" y="755" width="690" height="153" rx="18" fill="#e6f3eb" stroke="#9bc6b5"/>
+<text x="873" y="796" class="name" >PC / 서버 · Claude Agent</text>
+<text x="873" y="838" class="body" >관측 검증 → Tool 선택 → 완료 / 중단 / 제한된 재안내</text>
+<text x="873" y="879" class="small" >사용자가 직접 조작 · 자동 인덕션 제어 없음</text>
+<path d="M740 832 L841 832" fill="none" stroke="#127b65" stroke-width="5" marker-end="url(#now)"/>
+<path d="M1535 355H1577V832H1540" fill="none" stroke="#b87b27" stroke-width="4" stroke-dasharray="9 7" marker-end="url(#plan)"/>
+<text x="1190" y="727" class="small" >실물 확장 시 USB / JSON Lines</text>
+<rect x="40" y="951" width="1495" height="91" rx="16" fill="#fff" stroke="#d8e5e2"/>
+<text x="65" y="988" class="tag" >후속 기능</text>
+<text x="230" y="988" class="body" >GY-906 / MLX90614 → 잔열 관측</text>
+<text x="860" y="988" class="body" >5V 진동모터 → 촉각 안내</text>
+<text x="230" y="1022" class="small" >현재 시연 경로에서 제외 · 연결 전 전원·신호·구동 방식 확인</text>
+<path d="M40 1085 L105 1085" fill="none" stroke="#b87b27" stroke-width="4" stroke-dasharray="9 7"/>
+<text x="120" y="1092" class="small" >실물 연결 계획</text>
+<path d="M385 1085 L450 1085" fill="none" stroke="#127b65" stroke-width="5" />
+<text x="465" y="1092" class="small" >현재 Mock 경로</text>
+<text x="820" y="1092" class="small" >저항값·전원·핀맵·입력 보호·실측 보정은 미확정</text>
+</svg>
