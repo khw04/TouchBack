@@ -101,7 +101,8 @@ def test_displayed_signals_are_consumed_evidence_with_the_original_baseline():
         assert baseline['device_observation']['field_summary']['rms']==100
         result=c.post(path+'/step',json={'action_id':action}).json()
         receipts=result['simulation']['observations']
-        assert len(receipts)==1
+        assert len(receipts)==2
+        assert {item["device_observation"]["zone_id"] for item in receipts}=={"left","right"}
         assert receipts[0]['observation_id'] in result['verdict']['evidence_ids']
         assert receipts[0]['action_id']==action and receipts[0]['run_id']==run['run_id']
         assert receipts[0]['device_observation']['field_summary']['rms']==120

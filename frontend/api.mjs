@@ -49,6 +49,7 @@ export function validateRun(data, expectedId) {
       !filled(item.message) || !Array.isArray(item.evidence_ids))) {
     invalid("실행 기록 형식이 다릅니다.");
   }
+  if(data.diagnosis!=null && (!record(data.diagnosis) || data.source!=="mock" || data.diagnosis.source!=="mock" || !filled(data.diagnosis.code) || !filled(data.diagnosis.message) || !filled(data.diagnosis.next_action) || !Array.isArray(data.diagnosis.evidence_ids) || !record(data.diagnosis.zones)))invalid("관측 진단 형식이 다릅니다.");
   if (data.simulation != null) {
     const sim=data.simulation;
     if(data.source!=="mock" || !record(sim) || sim.kind!=="virtual_cooktop" || !record(sim.levels) ||
@@ -83,7 +84,7 @@ export function validateDemoMetadata(data) {
         !MODES.has(data.execution_mode) || !Array.isArray(data.scenarios) || !data.scenarios.includes(data.scenario)) invalid("시연 준비 정보가 유효하지 않습니다.");
     return data;
   }
-  const allowed = new Set(["normal", "recovery", "sensor_error", "missing", "delayed", "no_change", "duplicate", "recovery_exhausted"]);
+  const allowed = new Set(["normal", "recovery", "sensor_error", "missing", "delayed", "no_change", "duplicate", "recovery_exhausted", "double_input"]);
   if (data.source !== "mock" || !["mock_llm", "real_llm"].includes(data.execution_mode) ||
       data.physical_validation_performed !== false || !Array.isArray(data.scenarios) ||
       !data.scenarios.length || data.scenarios.some(name => !allowed.has(name)) ||

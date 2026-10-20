@@ -86,7 +86,7 @@ def test_verdict_cannot_overclaim(status, level, satisfied):
         Verdict(status=status, verification_level=level, goal_satisfied=satisfied, reason_codes=[], evidence_ids=[])
 
 
-@pytest.mark.parametrize("changes", [{"zone_id": "unknown"}, {"direction": "decrease"}, {"requested_steps": 2}, {"requested_steps": True}])
+@pytest.mark.parametrize("changes", [{"zone_id": "unknown"}, {"direction": "toggle"}, {"requested_steps": 2}, {"requested_steps": True}])
 def test_goal_limited_to_current_scope(changes):
     payload = dict(zone_id="right", direction="increase", requested_steps=1)
     payload.update(changes)
@@ -117,3 +117,7 @@ def test_ack_false_and_empty_input_rejected():
         AckResponse(run_id="run-1", status="observing", accepted=False)
     with pytest.raises(ValidationError):
         CreateRunRequest(user_input="   ", source="mock", zone_id=None)
+
+
+def test_single_step_decrease_is_explicitly_supported():
+    assert Goal(zone_id="left",direction="decrease",requested_steps=1).direction=="decrease"

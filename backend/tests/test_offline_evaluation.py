@@ -174,3 +174,27 @@ def test_committed_synthetic_example_is_executable():
     assert group["counts"]["missing_outcomes"] == 1
     assert group["rates"]["goal_confirmation"] == .5
     assert group["rates"]["uncertain_per_included"] == pytest.approx(1/3)
+
+
+@pytest.mark.parametrize("zone", ["left", "right"])
+@pytest.mark.parametrize("direction,after,met", [
+    ("increase", 6, True), ("increase", 4, False),
+    ("decrease", 4, True), ("decrease", 6, False),
+])
+def test_evaluation_success_matches_requested_direction(zone, direction, after, met):
+    ref = trial(goal=Goal(zone_id=zone, direction=direction, requested_steps=1), before_level=5, after_level=after)
+    group = evaluate([ref], [outcome(ref)])["groups"][0]
+    assert group["trials"][0]["reference_goal_met"] is met
+    assert group["counts"]["correct_confirmations"] == int(met)
+    assert group["counts"]["false_successes"] == int(not met)
+    assert group["counts"]["exact_goal_correct"] == int(met)
+    assert group["rates"]["false_success_per_included"] == int(not met)
+
+
+@pytest.mark.parametrize("direction", ["increase", "decrease"])
+def test_directional_reference_with_missing_level_stays_unassessable(direction):
+    ref = trial(goal=Goal(zone_id="right", direction=direction, requested_steps=1), before_level=5, after_level=None)
+    group = evaluate([ref], [outcome(ref)])["groups"][0]
+    assert group["trials"][0]["reference_goal_met"] is None
+    assert group["counts"]["unassessable_successes"] == 1
+    assert group["counts"]["correct_confirmations"] == group["counts"]["false_successes"] == 0

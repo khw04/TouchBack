@@ -4,12 +4,12 @@ from typing import Literal
 from app.adapters.mock import MockAdapter, ScheduledObservation, VirtualClock
 from app.contracts.models import DeviceObservation, FieldSummary, Quality, Zone
 
-MockScenario = Literal["normal", "no_change", "missing", "delayed", "duplicate", "sensor_error"]
+MockScenario = Literal["normal", "no_change", "missing", "delayed", "duplicate", "sensor_error", "double_input"]
 
 
 def build_mock_adapter(scenario: MockScenario = "normal", *, zone_id: Zone = "right") -> MockAdapter:
     """Test signals, not real calibration or expected verdict labels."""
-    if scenario not in ("normal", "no_change", "missing", "delayed", "duplicate", "sensor_error"):
+    if scenario not in ("normal", "no_change", "missing", "delayed", "duplicate", "sensor_error", "double_input"):
         raise ValueError("unknown local mock scenario")
     if zone_id not in ("right", "left"):
         raise ValueError("zone_id must be right or left")
@@ -28,8 +28,8 @@ def build_mock_adapter(scenario: MockScenario = "normal", *, zone_id: Zone = "ri
     if scenario != "missing":
         faulty = scenario == "sensor_error"
         followup = frame(5, 1000, 1500, 4500 if scenario == "delayed" else 1500,
-                         None if faulty else (100.0 if scenario == "no_change" else 120.0),
-                         None if faulty else (0 if scenario == "no_change" else 1),
+                         None if faulty else (100.0 if scenario == "no_change" else 140.0 if scenario == "double_input" else 120.0),
+                         None if faulty else (0 if scenario == "no_change" else 2 if scenario == "double_input" else 1),
                          Quality(status="invalid", reasons=["disconnected"]) if faulty else Quality(status="valid", reasons=[]))
         schedule.append(followup)
         if scenario == "duplicate":

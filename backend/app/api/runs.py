@@ -98,6 +98,7 @@ class RunState(BaseModel):
     zone_id: Zone | None
     instruction: Instruction | None = None
     verdict: Verdict | None = None
+    diagnosis: dict | None = None
     events: list[RunEvent] = []
     current_action_id: str | None = None
     seen_action_ids: list[str] = []
@@ -409,6 +410,11 @@ class RunStore:
                 # These checks are server policy, independent of model Tool selection.
                 # Run immediately before publishing an actionable instruction.
                 orch.executed_tool_calls.extend(await required_preflight(tool_registry, goal.zone_id))
+                if isinstance(adapter,VirtualCooktopAdapter):
+                    profile=adapter.calibration_for_zone(goal.zone_id)
+                    expected=1 if goal.direction=="increase" else -1
+                    if profile is not None and not any(b.steps==expected for b in profile.step_bands):
+                        orch.executed_tool_calls.append({"name":"check_supported_change","arguments":{"zone_id":goal.zone_id},"result":{"success":False,"error":"모의 보정 범위의 최대/최소 단계입니다.","data":None}})
                 return planned_goal, planned_instruction, message, list(orch.executed_tool_calls)
 
             try:
@@ -570,7 +576,7 @@ class RunStore:
         return RunResponse(run_id=state.run_id, status=state.status,
                            execution_mode=state.execution_mode, source=state.source,
                            instruction=state.instruction, verdict=state.verdict,
-                           events=state.events,
+                           events=state.events, diagnosis=state.diagnosis,
                            simulation=state.adapter.operator_view() if isinstance(state.adapter,VirtualCooktopAdapter) else None).model_copy(deep=True)
 
     def get_run(self, run_id: str) -> RunResponse:
@@ -590,7 +596,7 @@ class RunStore:
                 source=state.source,
                 instruction=state.instruction,
                 verdict=state.verdict,
-                events=state.events,
+                events=state.events, diagnosis=state.diagnosis,
                 simulation=state.adapter.operator_view() if isinstance(state.adapter,VirtualCooktopAdapter) else None,
             )
 
@@ -864,12 +870,13 @@ class RunStore:
                     source=current_state.source,
                     instruction=current_state.instruction,
                     verdict=current_state.verdict,
-                    events=current_state.events,
+                    events=current_state.events, diagnosis=current_state.diagnosis,
                     simulation=current_state.adapter.operator_view() if isinstance(current_state.adapter,VirtualCooktopAdapter) else None,
                 )
 
             now = self._now_utc()
             current_state.verdict = verdict
+            current_state.diagnosis = orch.diagnosis
             next_status = orch.determine_next_status(verdict)
             for call in recovery_checks:
                 result = call["result"]
@@ -918,21 +925,21 @@ class RunStore:
                         source=current_state.source,
                         instruction=current_state.instruction,
                         verdict=current_state.verdict,
-                        events=current_state.events,
+                        events=current_state.events, diagnosis=current_state.diagnosis,
                     simulation=current_state.adapter.operator_view() if isinstance(current_state.adapter,VirtualCooktopAdapter) else None,
                     )
                 elif rec_res.decision.value == "late_success":
                     next_status = "succeeded"
                     if rec_res.updated_verdict:
                         current_state.verdict = rec_res.updated_verdict
-                    feedback = rec_res.message
+                    feedback = (orch.diagnosis["message"]+" "+rec_res.message) if orch.diagnosis else rec_res.message
                 else:  # abort_uncertain
                     next_status = "uncertain"
                     current_state.instruction = None
                     current_state.current_action_id = None
                     if rec_res.updated_verdict:
                         current_state.verdict = rec_res.updated_verdict
-                    feedback = rec_res.message
+                    feedback = (orch.diagnosis["message"]+" "+rec_res.message) if orch.diagnosis else rec_res.message
 
             current_state.status = next_status
             current_state.status_updated_at = now
@@ -963,7 +970,7 @@ class RunStore:
                 source=current_state.source,
                 instruction=current_state.instruction,
                 verdict=current_state.verdict,
-                events=current_state.events,
+                events=current_state.events, diagnosis=current_state.diagnosis,
                 simulation=current_state.adapter.operator_view() if isinstance(current_state.adapter,VirtualCooktopAdapter) else None,
             )
 

@@ -51,7 +51,7 @@ class VirtualCooktopAdapter(MockAdapter):
             before=self.levels[zone]
             target_before=self.levels[self.target_zone]
             if not missed:
-                self.levels[zone]=max(0,min(9,before+(1 if operation=="increase" else -1)))
+                self.levels[zone]=max(0,min(9,before+(1 if operation=="increase" else -1)*(2 if self.scenario=="double_input" else 1)))
             recognized=not missed
             self.presses[action_id]={"action_id":action_id,"zone":zone,"operation":operation,"recognized":recognized}
             if self.scenario=="missing":
@@ -59,17 +59,18 @@ class VirtualCooktopAdapter(MockAdapter):
             start=window_start+500;end=start+500
             rms=float(self.levels[self.target_zone]*20)
             arrival=end+3000 if self.scenario=="delayed" else end
-            frame=self.frame(self.next_seq,start,end,arrival,rms,int(recognized),self.scenario=="sensor_error")
-            self.next_seq+=1
-            self._pending.append(frame)
-            if self.scenario=="duplicate":
-                self._pending.append(ScheduledObservation(arrival+100,frame.observation.model_copy(deep=True)))
-            # A fresh independently timed baseline after the original action window.
-            # It is not returned as evidence for the original action, and does not
-            # authorize another action until existing recovery policy permits it.
-            if self.levels[self.target_zone]==target_before and self.scenario in ("normal","recovery","recovery_exhausted","duplicate"):
-                self._pending.append(self.frame(self.next_seq,window_end+500,window_end+1000,window_end+1000,rms,0))
+            for observed_zone in (self.target_zone,"left" if self.target_zone=="right" else "right"):
+                # One microphone event belongs to the target observation; do not double count it.
+                beeps=(2 if self.scenario=="double_input" else 1)*int(recognized) if observed_zone==self.target_zone else None
+                frame=self.frame(self.next_seq,start,end,arrival,float(self.levels[observed_zone]*20),beeps,self.scenario=="sensor_error",zone=observed_zone)
                 self.next_seq+=1
+                self._pending.append(frame)
+                if self.scenario=="duplicate":
+                    self._pending.append(ScheduledObservation(arrival+100,frame.observation.model_copy(deep=True)))
+            if self.levels[self.target_zone]==target_before and self.scenario in ("normal","recovery","recovery_exhausted","duplicate"):
+                for observed_zone in ("left","right"):
+                    self._pending.append(self.frame(self.next_seq,window_end+500,window_end+1000,window_end+1000,float(self.levels[observed_zone]*20),0,zone=observed_zone))
+                    self.next_seq+=1
             self._pending.sort(key=lambda item:item.arrival_ms)
 
     def calibration_for_zone(self, zone_id):
@@ -86,6 +87,12 @@ class VirtualCooktopAdapter(MockAdapter):
     def check_sensor_integrity(self):
         with self.guard:return super().check_sensor_integrity()
 
+    def await_zone_pair(self,**kwargs):
+        with self.guard:
+            items=self.await_touch_result(**kwargs)
+            other=dict(kwargs,zone_id="left" if kwargs["zone_id"]=="right" else "right",timeout_ms=0)
+            return items+self.await_touch_result(**other)
+
     def await_touch_result(self,**kwargs):
         with self.guard:
             items=super().await_touch_result(**kwargs)
@@ -94,7 +101,7 @@ class VirtualCooktopAdapter(MockAdapter):
 
     def operator_view(self):
         with self.guard:
-            return {"kind":"virtual_cooktop","levels":deepcopy(self.levels), "calibration_source":"mock",
+            return {"kind":"virtual_cooktop","levels":deepcopy(self.levels), "target_zone":self.target_zone, "calibration_source":"mock",
                     "sensor_states":{zone:state.snapshot() for zone,state in self.tracker.zones.items()}, "baselines":deepcopy(self.baselines),
                     "last_press":deepcopy(list(self.presses.values())[-1]) if self.presses else None,
                     "observations":[item.model_dump(mode="json") for item in self.receipts.values()]}

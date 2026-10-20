@@ -6,6 +6,7 @@ from typing import Any
 import uuid
 
 from app.contracts.goal_policy import interpret_p0_goal
+from app.agent.diagnosis import diagnose_pair
 from app.agent.instructions import instruction_text
 from app.agent.prompts import SYSTEM_PROMPT, get_verdict_message
 from app.agent.recovery import MisoperationRecoverySkill, RecoveryDecisionType, RecoveryResult, default_recovery_skill
@@ -109,6 +110,8 @@ class AgentOrchestrator:
         self.executed_tool_calls: list[dict[str, Any]] = []
         self._action_baselines: dict[tuple, Observation | None] = {}
         self._action_profiles = {}
+        self._action_pairs = {}
+        self.diagnosis = None
 
     def interpret_goal(
         self,
@@ -312,10 +315,16 @@ class AgentOrchestrator:
         calibration = self.verifier.get_calibration_for_zone(goal.zone_id)
         self._action_profiles = {key: calibration}
 
+        paired=hasattr(self.adapter,"await_zone_pair")
+        if paired:
+            baselines={zone:self.adapter.read_baseline(zone) for zone in ("left","right")}
+            profiles={zone:self.verifier.get_calibration_for_zone(zone) for zone in ("left","right")}
+            self._action_pairs={key:(baselines,profiles)}
+        collector=self.adapter.await_zone_pair if paired else self.adapter.await_touch_result
         # 2. 터치 관측 결과 수집
         observations: list[Observation] = []
         if hasattr(self.adapter, "await_touch_result"):
-            observations = self.adapter.await_touch_result(
+            observations = collector(
                 run_id=run_id,
                 action_id=action_id,
                 zone_id=goal.zone_id,
@@ -325,7 +334,7 @@ class AgentOrchestrator:
             )
             # 1차 시간창 내 미도착 시 지연 도착 신호 추가 확인
             if not observations and hasattr(self.adapter, "clock"):
-                late_obs = self.adapter.await_touch_result(
+                late_obs = collector(
                     run_id=run_id,
                     action_id=action_id,
                     zone_id=goal.zone_id,
@@ -353,12 +362,16 @@ class AgentOrchestrator:
         verdict = self.verifier.verify(
             goal=goal,
             baseline=baseline,
-            observations=observations,
+            observations=[o for o in observations if o.device_observation.zone_id==goal.zone_id],
             context=context,
             calibration=calibration,
         )
 
-        feedback = get_verdict_message(verdict.status, verdict.verification_level)
+        if paired:
+            self.diagnosis,verdict=diagnose_pair(goal,baselines,profiles,observations,context)
+        feedback = self.diagnosis["message"]+" "+self.diagnosis["next_action"] if self.diagnosis else get_verdict_message(verdict.status, verdict.verification_level)
+        if verdict.status=="success" and goal.direction=="decrease" and self.diagnosis is None:
+            feedback="화력이 한 단계 내려갔습니다."
         return verdict, feedback
 
     def determine_next_status(self, verdict: Verdict) -> RunStatus:
@@ -399,7 +412,8 @@ class AgentOrchestrator:
         delayed_verdict: Verdict | None = None
         delayed_obs: list[Observation] = []
         if hasattr(self.adapter, "await_touch_result"):
-            delayed_obs = self.adapter.await_touch_result(
+            collector=getattr(self.adapter,"await_zone_pair",self.adapter.await_touch_result)
+            delayed_obs = collector(
                 run_id=run_id,
                 action_id=action_id,
                 zone_id=goal.zone_id,
@@ -426,10 +440,14 @@ class AgentOrchestrator:
             delayed_verdict = self.verifier.verify(
                 goal=goal,
                 baseline=baseline,
-                observations=delayed_obs,
+                observations=[o for o in delayed_obs if o.device_observation.zone_id==goal.zone_id],
                 context=delayed_context,
                 calibration=original_profile,
             )
+
+        if key in self._action_pairs and delayed_obs:
+            bases,profiles=self._action_pairs[key]
+            self.diagnosis,delayed_verdict=diagnose_pair(goal,bases,profiles,delayed_obs,delayed_context)
 
         # 2. 센서 무결성 점검
         sensor_integrity_ok = True
