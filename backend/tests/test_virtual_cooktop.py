@@ -89,3 +89,20 @@ def test_internal_simulator_state_is_not_passed_to_model():
         press(c,path,run);c.post(path+'/step',json={'action_id':action})
     assert messages
     assert all('recovery_exhausted' not in m and '"levels"' not in m and '"simulation"' not in m for m in messages)
+
+
+def test_displayed_signals_are_consumed_evidence_with_the_original_baseline():
+    with client() as c:
+        path=start(c);run=c.get(path).json();action=run['instruction']['action_id']
+        assert run['simulation']['observations']==[]
+        r=press(c,path,run).json()
+        assert r['simulation']['observations']==[]
+        baseline=r['simulation']['baselines'][action]
+        assert baseline['device_observation']['field_summary']['rms']==100
+        result=c.post(path+'/step',json={'action_id':action}).json()
+        receipts=result['simulation']['observations']
+        assert len(receipts)==1
+        assert receipts[0]['observation_id'] in result['verdict']['evidence_ids']
+        assert receipts[0]['action_id']==action and receipts[0]['run_id']==run['run_id']
+        assert receipts[0]['device_observation']['field_summary']['rms']==120
+        assert result['simulation']['baselines'][action]==baseline

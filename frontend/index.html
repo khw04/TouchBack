@@ -91,8 +91,9 @@
     </section>
     <aside class="insight-card" aria-labelledby="insight-title">
       <div class="section-label"><span class="step-number">04</span><h2 id="insight-title">센서와 Agent</h2></div>
-      <div class="signal-block"><span class="signal-icon" aria-hidden="true">⌁</span><h3>센서 관측</h3><p id="sensor-stage">관측 대기</p><p class="hint">비프음·자기장 수치는 아직 화면에 제공되지 않습니다.</p></div>
-      <div class="signal-block"><span class="signal-icon" aria-hidden="true">◇</span><h3>Agent 진행</h3><p id="agent-stage">요청 대기</p><p id="agent-stage-detail" class="hint">서버가 확인한 진행 상태만 표시합니다.</p></div>
+      <div class="signal-block"><span class="signal-icon" aria-hidden="true">⌁</span><h3>센서 관측</h3><p id="sensor-stage">관측 대기</p><dl class="sensor-readings" aria-live="polite"><div><dt>비프음</dt><dd id="signal-beep">—</dd></div><div><dt>자기장 RMS</dt><dd id="signal-field">—</dd></div><div><dt>기준 대비</dt><dd id="signal-delta">—</dd></div><div><dt>관측 품질</dt><dd id="signal-quality">확인 전</dd></div></dl>
+        <meter id="field-meter" min="0" max="200" value="0" aria-label="모의 자기장 RMS 크기" hidden></meter><p id="signal-note" class="hint">수집된 모의 관측이 없습니다.</p></div>
+      <div class="signal-block"><span class="signal-icon" aria-hidden="true">◇</span><h3>Agent 진행</h3><p id="agent-stage">요청 대기</p><p id="agent-stage-detail" class="hint">서버가 확인한 진행 상태만 표시합니다.</p><ol id="agent-trail" class="agent-trail" aria-label="최근 서버 처리 과정"></ol></div>
       <div class="result-block"><h3>판정 요약</h3><p id="result-summary" role="status" aria-live="polite">아직 판정이 없습니다.</p></div>
     </aside>
   </section>

@@ -834,3 +834,26 @@ test("lost virtual press response blocks further presses until status is recheck
   await app.el('retry').fire('click');assert.equal(app.el('virtual-right-increase').disabled,false);assert.equal(presses,1);
  }finally{app.close();}
 });
+
+
+test("sensor visualization uses only consumed current press evidence and preserves missing values",async()=>{
+ const {signalsFor,trailFor}=await import('../../frontend/signals.mjs');
+ const observation={observation_id:'obs',action_id:'a1',device_observation:{beep_count:1,field_summary:{rms:120,unit:'adc_count'},quality:{status:'valid'}}};
+ const sim={kind:'virtual_cooktop',levels:{left:5,right:6},last_press:{action_id:'a1'},baselines:{a1:{device_observation:{field_summary:{rms:100,unit:'adc_count'}}}},observations:[observation]};
+ assert.equal(signalsFor({simulation:{...sim,observations:[]},status:'observing'}).rms,null);
+ const signal=signalsFor({simulation:sim,status:'succeeded'});
+ assert.equal(signal.beep,'1회');assert.equal(signal.field,'120 adc_count');assert.equal(signal.delta,'+20');assert.equal(signal.quality,'정상');
+ const retry=signalsFor({simulation:sim,status:'awaiting_user',instruction:{action_id:'a2'}});assert.match(retry.note,/이전 조작/);
+ const broken=signalsFor({simulation:{...sim,observations:[{...observation,device_observation:{beep_count:null,field_summary:null,quality:{status:'invalid'}}}]},status:'uncertain'});
+ assert.equal(broken.rms,null);assert.equal(broken.beep,'확인 불가');assert.equal(broken.quality,'불량');
+ assert.deepEqual(trailFor({events:[{kind:'plan'},{kind:'tool_call'},{kind:'instruction'},{kind:'observation'},{kind:'verdict'}]}).map(e=>e.kind),['instruction','observation','verdict']);
+});
+
+test("malformed simulation signal data cannot be accepted as a server snapshot",()=>{
+ const base={run_id:'r',status:'uncertain',execution_mode:'mock_llm',source:'mock',instruction:null,verdict:null,events:[],simulation:{kind:'virtual_cooktop',levels:{left:5,right:6},last_press:null,observations:[]}};
+ for(const simulation of [
+  {...base.simulation,levels:{left:'5',right:6}},
+  {...base.simulation,observations:[{observation_id:'x',run_id:'other'}]},
+  {...base.simulation,baselines:{a:{observation_id:'x',device_observation:{field_summary:{rms:'100',unit:'adc_count'}}}}}
+ ])assert.throws(()=>validateRun({...base,simulation},'r'),/유효하지/);
+});

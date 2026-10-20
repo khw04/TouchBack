@@ -1,3 +1,4 @@
+import { signalsFor, trailFor } from "./signals.mjs?v=19";
 import { screenSummary } from "./screen.mjs?v=19";
 import { demoLabel, demoControlsDisabled } from "./demo.mjs?v=19";
 import { createApi, freshSpeechItems, TERMINAL } from "./api.mjs?v=19";
@@ -103,6 +104,8 @@ function maskUnverifiedSnapshot() {
   $("sensor-stage").textContent = "현재 관측 확인 불가";
   $("agent-stage-detail").textContent = "상태 다시 확인이 성공할 때까지 이전 결과를 현재 결과로 사용하지 마세요.";
   $("result-summary").textContent = snapshot.verdict;
+  $("signal-note").textContent="현재 수치는 마지막 서버 응답이며 최신 상태가 아닐 수 있습니다.";
+  $("field-meter").hidden=true;
 }
 
 function showError(message) {
@@ -151,11 +154,18 @@ function renderEvents(items) {
   state.renderedEventIds = change.ids;
 }
 function renderScreen(run) {
+  const signal=signalsFor(run);
+  for(const name of ["beep","field","delta","quality","note"]) $("signal-"+name).textContent=signal[name];
+  $("field-meter").hidden=signal.rms===null;
+  if(signal.rms!==null) $("field-meter").value=signal.rms;
+  $("signal-note").setAttribute("data-state",run.status);
+  $("agent-trail").replaceChildren(...trailFor(run).map(item=>{const li=document.createElement("li");li.textContent=`${eventLabel(item.kind)} · ${item.message}`;return li;}));
   const sim=run.simulation;
   for(const zone of ["left","right"]) $("level-"+zone).textContent=sim?String(sim.levels[zone]):"—";
   $("cooktop-note").textContent=sim?"가상 장치 내부 화력 · Agent는 이 숫자를 읽지 않고 모의 센서 관측으로 판정합니다.":"화면에서 시연을 활성화하면 가상 버튼을 조작할 수 있습니다.";
   const summary = screenSummary(run);
   const blocked = state.demoUnverified || cancellingCurrentRun() && !TERMINAL.has(run.status);
+  if(blocked) {$("signal-note").textContent="설정·취소 결과 확인 중 · 표시된 수치는 마지막 관측입니다.";$("field-meter").hidden=true;}
   $("agent-stage").textContent = blocked ? "조작 안내 보류 중" : summary.agent;
   $("sensor-stage").textContent = blocked ? "상태 확인 대기" : summary.sensor;
   $("agent-stage-detail").textContent = summary.detail;

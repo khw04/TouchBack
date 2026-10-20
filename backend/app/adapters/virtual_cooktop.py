@@ -12,6 +12,7 @@ class VirtualCooktopAdapter(MockAdapter):
         self.levels = {"left": 5, "right": 5}
         self.presses = {}
         self.receipts = {}
+        self.baselines = {}
         self.next_seq = 5
         initial = [self.frame(i,i*100,(i+1)*100,(i+1)*100,100.0,0) for i in range(5)]
         super().__init__(initial,VirtualClock(now_ms=500))
@@ -32,6 +33,8 @@ class VirtualCooktopAdapter(MockAdapter):
                 if previous["zone"]!=zone or previous["operation"]!=operation:
                     raise ValueError("same action has a different press")
                 return
+            baseline=self.read_baseline(self.target_zone)
+            self.baselines[action_id]=baseline.model_dump(mode="json") if baseline else None
             missed=self.scenario=="recovery_exhausted" or self.scenario=="no_change" or self.scenario=="recovery" and not self.presses
             before=self.levels[zone]
             if not missed:
@@ -70,6 +73,6 @@ class VirtualCooktopAdapter(MockAdapter):
 
     def operator_view(self):
         with self.guard:
-            return {"kind":"virtual_cooktop","levels":deepcopy(self.levels),
+            return {"kind":"virtual_cooktop","levels":deepcopy(self.levels), "baselines":deepcopy(self.baselines),
                     "last_press":deepcopy(list(self.presses.values())[-1]) if self.presses else None,
                     "observations":[item.model_dump(mode="json") for item in self.receipts.values()]}

@@ -53,6 +53,23 @@ export function validateRun(data, expectedId) {
     if(data.source!=="mock" || !record(sim) || sim.kind!=="virtual_cooktop" || !record(sim.levels) ||
        ![sim.levels.left,sim.levels.right].every(v=>Number.isInteger(v)&&v>=0&&v<=9) || !Array.isArray(sim.observations)) invalid("가상 인덕션 상태가 유효하지 않습니다.");
   }
+  if(data.simulation != null) {
+    for(const item of data.simulation.observations) {
+      const d=item?.device_observation,f=d?.field_summary;
+      if(!record(item)||!filled(item.observation_id)||item.run_id!==data.run_id||!filled(item.action_id)||!record(d)||d.source!=="mock"||
+         !["left","right"].includes(d.zone_id)||!(d.beep_count===null||Number.isInteger(d.beep_count)&&d.beep_count>=0)||
+         !record(d.quality)||!["valid","degraded","invalid"].includes(d.quality.status)||
+         !(f===null||record(f)&&Number.isFinite(f.rms)&&f.rms>=0&&["adc_count","millivolt"].includes(f.unit))) invalid("모의 관측 표시 정보가 유효하지 않습니다.");
+    }
+    if(data.simulation.last_press!=null && (!record(data.simulation.last_press)||!filled(data.simulation.last_press.action_id))) invalid("가상 입력 기록이 유효하지 않습니다.");
+    if(data.simulation.baselines!=null) {
+      if(!record(data.simulation.baselines)) invalid("기준 관측 정보가 유효하지 않습니다.");
+      for(const baseline of Object.values(data.simulation.baselines)) {
+        const f=baseline?.device_observation?.field_summary;
+        if(baseline!==null && (!record(baseline)||!filled(baseline.observation_id)||!record(f)||!Number.isFinite(f.rms)||f.rms<0||!["adc_count","millivolt"].includes(f.unit))) invalid("기준 관측 수치가 유효하지 않습니다.");
+      }
+    }
+  }
   return data;
 }
 
