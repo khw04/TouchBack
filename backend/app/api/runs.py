@@ -617,6 +617,7 @@ class RunStore:
                 raise RunApiException(409,"stale_action","현재 조작 안내를 확인하세요.")
             adapter.press(action_id,zone,operation,state.action_window_start_ms,state.action_window_end_ms)
             self.virtual_levels = dict(adapter.levels)
+            state.diagnosis=None
             state.status="observing"
             state.last_acked_action_id=action_id
             state.status_updated_at=self._now_utc()
