@@ -12,7 +12,7 @@
 </marker>
 </defs>
 <text x="40" y="65" class="title" >센서 신호가 Agent에 도착하기까지</text>
-<text x="40" y="107" class="sub" >실물 연결 구상과 현재 센서 없는 시연을 분리한 블록 구성도 · 핀 배선도 아님</text>
+<text x="40" y="107" class="sub" >실물 경로는 환불 부품 포함 / 미구축 · 현재는 아래 초록 Mock 경로로 시연 · 핀 배선도 아님</text>
 <rect x="40" y="155" width="300" height="380" rx="20" fill="#fff" stroke="#d8e5e2"/>
 <text x="62" y="193" class="tag" >01</text>
 <text x="62" y="233" class="name" >외부 픽업 코일</text>
@@ -92,7 +92,7 @@
 <circle cx="46" cy="39" r="18" fill="#cdd8d5"/>
 <circle cx="46" cy="39" r="6" fill="#172d32"/>
 </g>
-<text x="181" y="622" class="name" >INMP441 · ビ프음</text>
+<text x="181" y="622" class="name" >INMP441 · 비프음</text>
 <text x="181" y="663" class="small" >음성 명령용 PC 마이크와 별개</text>
 <path d="M470 633H1345V448" fill="none" stroke="#b87b27" stroke-width="4" stroke-dasharray="9 7" marker-end="url(#plan)"/>
 <text x="735" y="616" class="small" >I2S · 비프음 단서 수집</text>
@@ -108,12 +108,12 @@
 <path d="M1535 355H1577V832H1540" fill="none" stroke="#b87b27" stroke-width="4" stroke-dasharray="9 7" marker-end="url(#plan)"/>
 <text x="1190" y="727" class="small" >실물 확장 시 USB / JSON Lines</text>
 <rect x="40" y="951" width="1495" height="91" rx="16" fill="#fff" stroke="#d8e5e2"/>
-<text x="65" y="988" class="tag" >후속 기능</text>
+<text x="65" y="988" class="tag" >환불 부품</text>
 <text x="230" y="988" class="body" >GY-906 / MLX90614 → 잔열 관측</text>
 <text x="860" y="988" class="body" >5V 진동모터 → 촉각 안내</text>
-<text x="230" y="1022" class="small" >현재 시연 경로에서 제외 · 연결 전 전원·신호·구동 방식 확인</text>
+<text x="230" y="1022" class="small" >디바이스마트 전액 환불 · 현재 미확보 / 시연 경로에서 제외</text>
 <path d="M40 1085 L105 1085" fill="none" stroke="#b87b27" stroke-width="4" stroke-dasharray="9 7"/>
-<text x="120" y="1092" class="small" >실물 연결 계획</text>
+<text x="120" y="1092" class="small" >미구축 실물 구상</text>
 <path d="M385 1085 L450 1085" fill="none" stroke="#127b65" stroke-width="5" />
 <text x="465" y="1092" class="small" >현재 Mock 경로</text>
 <text x="820" y="1092" class="small" >저항값·전원·핀맵·입력 보호·실측 보정은 미확정</text>
