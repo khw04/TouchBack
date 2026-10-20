@@ -81,3 +81,34 @@ def test_corrupt_other_zone_cannot_hide_behind_a_valid_target_or_device_truth():
     observed[-1].device_observation.quality.status="invalid"
     diagnosis,result=diagnose_pair(Goal(zone_id="right",direction="increase",requested_steps=1),bases,profiles,observed,context)
     assert diagnosis["code"]=="unreliable_observation" and result.status=="uncertain"
+
+
+@pytest.mark.parametrize("fault",["source","action","clock","calibration","window"])
+def test_other_channel_safety_checks_are_required_even_when_target_succeeds(fault):
+    from app.agent.diagnosis import diagnose_pair
+    from app.adapters.virtual_cooktop import VirtualCooktopAdapter
+    from app.contracts.models import Goal
+    from app.verification.models import ActionContext
+    a=VirtualCooktopAdapter("normal","right")
+    bases={z:a.read_baseline(z) for z in ("left","right")};profiles={z:a.calibration_for_zone(z) for z in bases}
+    a.press("a","right","increase",500,3500)
+    observations=a.await_zone_pair(run_id="r",action_id="a",zone_id="right",window_start_ms=500,window_end_ms=3500)
+    other=next(o for o in observations if o.device_observation.zone_id=="left")
+    if fault=="source":other.device_observation.source="replay"
+    if fault=="action":other.action_id="old"
+    if fault=="clock":other.clock_quality="unverified"
+    if fault=="calibration":other.device_observation.calibration_id="different"
+    if fault=="window":other.mapped_window_end_ms=4000
+    diagnosis,result=diagnose_pair(Goal(zone_id="right",direction="increase",requested_steps=1),bases,profiles,observations,ActionContext(run_id="r",action_id="a",window_start_ms=500,window_end_ms=3500,now_ms=a.clock.now_ms))
+    assert result.status=="uncertain" and diagnosis["correction"] is None
+
+
+@pytest.mark.parametrize("level,text",[(9,"오른쪽 화력 올려줘"),(0,"오른쪽 화력 내려줘")])
+def test_mock_limits_never_publish_an_impossible_instruction(level,text):
+    run_store.virtual_levels={"left":5,"right":level}
+    with client() as c:
+        c.post("/api/demo/settings",json={"execution_mode":"mock_llm","scenario":"normal"})
+        created=c.post("/api/runs",json={"user_input":text,"zone_id":None,"source":"mock"}).json()
+        result=c.get("/api/runs/"+created["run_id"]).json()
+        assert result["status"]=="uncertain" and result["instruction"] is None
+        assert c.get("/api/demo").json()["active_run_id"] is None

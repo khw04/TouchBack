@@ -1,6 +1,6 @@
 // Load the actual app entry point with a small DOM/transport double; no copied UI logic.
 let instance = 0;
-export async function loadApp(fetchImpl, search = '', {speechSupported = true} = {}) {
+export async function loadApp(fetchImpl, search = '', {speechSupported = true,recognitionCtor=null} = {}) {
   const names = ['document','window','location','fetch','speechSynthesis','SpeechSynthesisUtterance','setInterval','clearInterval'];
   const previous = new Map(names.map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)]));
   const spoken = [];
@@ -31,7 +31,7 @@ export async function loadApp(fetchImpl, search = '', {speechSupported = true} =
   el('demo-controls').hidden = true;
   Object.assign(globalThis, {
     document:{getElementById:el,createElement:()=>new Element(),documentElement:{classList:{toggle(){return true;}}}},
-    window:speechSupported ? {speechSynthesis:synth,SpeechSynthesisUtterance:Utterance} : {},location:{search},fetch:fetchImpl,
+    window:{...(speechSupported?{speechSynthesis:synth,SpeechSynthesisUtterance:Utterance}:{}),...(recognitionCtor?{SpeechRecognition:recognitionCtor}:{})},location:{search},fetch:fetchImpl,
     speechSynthesis:synth, SpeechSynthesisUtterance:Utterance,
     setInterval:callback=>{const id=Symbol('poll');pollers.set(id,callback);return id;},clearInterval:id=>pollers.delete(id),
   });

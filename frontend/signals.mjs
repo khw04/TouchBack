@@ -10,11 +10,12 @@ export function signalsFor(run) {
   const base=sim.baselines?.[actionId]?.device_observation?.field_summary;
   const delta=field && base && field.unit===base.unit?field.rms-base.rms:null;
   const beeps=items.every(item=>item.device_observation.beep_count!==null)?items.reduce((n,item)=>n+item.device_observation.beep_count,0):null;
-  const qualities=items.map(item=>item.device_observation.quality.status);
-  const quality=qualities.includes("invalid")?"불량":qualities.includes("degraded")?"저하":"정상";
+  const allItems=sim.observations.filter(item=>item.action_id===actionId);
+  const qualities=allItems.map(item=>item.device_observation.quality.status);
+  const quality=qualities.includes("invalid")?"불량":qualities.includes("degraded")?"저하":allItems.some(item=>!item.device_observation.field_summary)?"불완전":"정상";
   const previous=run.status==="awaiting_user" && run.instruction?.action_id!==actionId;
   return {beep:beeps===null?"확인 불가":`${beeps}회`,field:field?`${field.rms} ${field.unit}`:"관측 누락",delta:delta===null?"확인 불가":`${delta>0?"+":""}${Math.round(delta*100)/100}`,
-    quality,rms:field?.rms??null,note:`${previous?"이전 조작 · ":""}수집한 모의 관측 ${items.length}건`,key:items.map(item=>item.observation_id).join(":")};
+    quality,rms:field?.rms??null,note:`${previous?"이전 조작 · ":""}${sim.target_zone?`좌우 모의 관측 ${allItems.length}건`:`수집한 모의 관측 ${items.length}건`}`,key:items.map(item=>item.observation_id).join(":")};
 }
 
 export function trailFor(run) {

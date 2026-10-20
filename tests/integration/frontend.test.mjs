@@ -1145,3 +1145,45 @@ test('lost reset response masks state and blocks new start instead of inventing 
   assert.equal(app.el('level-left').textContent,'6');assert.equal(app.el('level-right').textContent,'7');
  }finally{app.close();}
 });
+
+
+test('voice transcript is a reviewable draft and never creates a run automatically',async()=>{
+ const {loadApp,ok,demoMetadata,activeRun}=await import('./app-harness.mjs');let engine;const posts=[];
+ class Recognition{constructor(){engine=this;}start(){}abort(){}}
+ const app=await loadApp(async(url,options)=>{if(options.method==='POST')posts.push(url);return ok(url==='/api/demo'?demoMetadata:activeRun);},'',{recognitionCtor:Recognition});
+ try{
+  await app.el('voice-input').fire('click');assert.equal(app.el('start').disabled,true);
+  engine.onresult({results:[[{transcript:'왼쪽 화력 한 단계 내려줘'}]]});
+  assert.equal(app.el('user-input').value,'왼쪽 화력 한 단계 내려줘');assert.deepEqual(posts,[]);assert.equal(app.el('start').disabled,false);
+  assert.match(app.el('status').textContent,/확인·수정/);
+ }finally{app.close();}
+});
+
+test('late voice result cannot overwrite a preset or active run',async()=>{
+ const {loadApp,ok,demoMetadata,activeRun}=await import('./app-harness.mjs');let engine,aborted=0;
+ class Recognition{constructor(){engine=this;}start(){}abort(){aborted++;}}
+ const app=await loadApp(async(url)=>ok(url==='/api/demo'?demoMetadata:activeRun),'',{recognitionCtor:Recognition});
+ try{
+  await app.el('voice-input').fire('click');const old=engine;
+  await app.el('preset-left').fire('click');old.onresult({results:[[{transcript:'오른쪽 화력 올려줘'}]]});
+  assert.match(app.el('user-input').value,/왼쪽/);assert.ok(aborted);
+  await app.el('goal-form').fire('submit');assert.equal(app.el('voice-input').disabled,true);
+  old.onresult({results:[[{transcript:'다른 목표'}]]});assert.match(app.el('user-input').value,/왼쪽/);
+ }finally{app.close();}
+});
+
+test('voice permission failures and unsupported browser preserve manual input',async()=>{
+ const {loadApp,ok,demoMetadata}=await import('./app-harness.mjs');let engine;
+ class Recognition{constructor(){engine=this;}start(){}abort(){}}
+ const app=await loadApp(async()=>ok(demoMetadata),'',{recognitionCtor:Recognition});
+ try{await app.el('voice-input').fire('click');engine.onerror({error:'not-allowed'});assert.equal(app.el('start').disabled,false);assert.match(app.el('status').textContent,/권한/);}finally{app.close();}
+ const absent=await loadApp(async()=>ok(demoMetadata));
+ try{assert.equal(absent.el('voice-input').disabled,true);assert.match(absent.el('voice-note').textContent,/미지원/);assert.equal(absent.el('start').disabled,false);}finally{absent.close();}
+});
+
+test('voice deadline aborts a stuck recognizer and ignores its late transcript',async()=>{
+ const {createVoiceInput}=await import('../../frontend/voice.mjs');let engine,deadline,busy=false,aborted=false;const drafts=[];const statuses=[];
+ const voice=createVoiceInput({factory:()=>engine={start(){},abort(){aborted=true;}},canEdit:()=>true,onDraft:t=>drafts.push(t),onStatus:t=>statuses.push(t),onBusy:b=>{busy=b;},schedule:fn=>{deadline=fn;return 1;},cancelTimer(){}});
+ voice.start();assert.equal(busy,true);deadline();assert.equal(busy,false);assert.equal(aborted,true);
+ engine.onresult({results:[[{transcript:'오른쪽 화력 올려줘'}]]});assert.deepEqual(drafts,[]);assert.match(statuses.at(-1),/시간/);
+});

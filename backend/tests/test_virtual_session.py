@@ -63,3 +63,13 @@ def test_cancel_after_press_preserves_device_change_without_claiming_verified_su
         c.post("/api/demo/runs/"+rid+"/press",json={"action_id":run["instruction"]["action_id"],"zone_id":"left","operation":"increase"})
         assert c.post("/api/runs/"+rid+"/cancel").json()["status"]=="stopped"
         assert begin(c)["simulation"]["levels"]=={"left":6,"right":5}
+
+
+def test_virtual_field_sampling_models_processed_adc_channels_not_raw_induction_carrier():
+    from app.adapters.virtual_cooktop import VirtualCooktopAdapter
+    adapter=VirtualCooktopAdapter("normal","right")
+    for zone in ("left","right"):
+        field=adapter.read_baseline(zone).device_observation.field_summary
+        assert field.sample_rate_hz==200 and field.method=="envelope_rms_v1"
+        assert field.sample_count==20
+    assert 2*200<=860

@@ -517,6 +517,8 @@ class RunStore:
 
             # 4. 사전 점검 센서 결함 감지 시 명시적 uncertain 종료
             if sensor_fault_detected:
+                if any(tc.get("name")=="check_supported_change" and not tc.get("result",{}).get("success") for tc in executed_tool_calls):
+                    current_state.diagnosis={"code":"mock_range_limit","message":"모의 보정 범위의 최대 또는 최소 단계여서 요청한 변화를 진행할 수 없습니다.","next_action":"다른 목표를 입력하거나 시연 장치를 명시적으로 초기화하세요.","source":"mock","action_id":action_id,"evidence_ids":[],"zones":{},"correction":None}
                 current_state.status = "uncertain"
                 current_state.verdict = Verdict(
                     status="uncertain",
