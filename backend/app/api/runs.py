@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict
 from app.adapters.demo_setup import build_demo_adapter
 from app.adapters.virtual_cooktop import VirtualCooktopAdapter
 from app.agent.verifier import IntentVerifier
+from app.agent.instructions import instruction_text
 from app.agent.orchestrator import FATAL_LLM_ERRORS, AgentOrchestrator
 from app.agent.recovery import RecoveryDecisionType
 from app.config import settings
@@ -433,7 +434,7 @@ class RunStore:
             zone_label = "오른쪽" if goal.zone_id == "right" else "왼쪽"
             instruction = Instruction(
                 action_id=action_id,
-                text=f"{zone_label} 화구의 + 버튼을 한 번 눌러 주세요.",
+                text=instruction_text(goal),
             )
             plan_detail_msg = "기본 조작 안내 적용"
 
@@ -480,7 +481,7 @@ class RunStore:
                         message=f"도구 '{tool_name}' 실행 실패: {err_text}",
                         action_id=action_id,
                     )
-                    if tool_name in ("check_sensor_integrity", "read_field"):
+                    if tc.get("origin") == "required_preflight" or tool_name in ("check_sensor_integrity", "read_field", "state_resynchronization", "check_supported_change"):
                         sensor_fault_detected = True
                         sensor_fault_reason = err_text
 

@@ -2,7 +2,7 @@
 from threading import RLock
 from copy import deepcopy
 import uuid
-from app.calibration.fitting import CalibrationCandidate, LevelSignature
+from app.calibration.fitting import DevelopmentSample, fit_candidate
 from app.observations.state import StateTracker
 from app.adapters.mock import MockAdapter, ScheduledObservation, VirtualClock
 from app.contracts.models import DeviceObservation, FieldSummary, Quality
@@ -17,10 +17,13 @@ class VirtualCooktopAdapter(MockAdapter):
             raise ValueError("invalid virtual device levels")
         self.session_id="mock-session-"+uuid.uuid4().hex[:10]
         self.tracker=StateTracker()
+        self.mock_profiles={}
         for zone in ("left","right"):
-            candidate=CalibrationCandidate(source="mock",status="draft",calibration_id="mock-test-v1",device_id="mock-device-01",session_id=self.session_id,
-                zone_id=zone,cooktop_model="virtual-only",cookware_id="virtual-only",installation_id="virtual-only",unit="adc_count",method="ac_rms_v1",sample_rate_hz=1000,
-                trial_ids=["explicit-synthetic-profile"],signatures=[LevelSignature(level=n,rms_min=max(0,n*20-2),rms_max=n*20+2) for n in range(10)])
+            samples=[DevelopmentSample(trial_id=f"synthetic-{zone}-{level}-{trial}",split="development",reference_source="mock_fixture",displayed_level=level,
+                cooktop_model="virtual-only",cookware_id="virtual-only",installation_id="virtual-only",
+                observation=self.frame(level*3+trial,0,500,500,float(level*20),0,zone=zone).observation) for level in range(10) for trial in range(3)]
+            candidate=fit_candidate(samples,calibration_id="mock-test-v1",margin=2.0)
+            self.mock_profiles[zone]=candidate
             self.tracker.zones[zone].activate_mock(candidate,installation_id="virtual-only")
         self.presses = {}
         self.receipts = {}
