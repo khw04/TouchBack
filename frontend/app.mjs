@@ -1,9 +1,9 @@
 import { signalsFor, trailFor, createSignalFlow } from "./signals.mjs?v=21";
 import { screenSummary } from "./screen.mjs?v=20";
-import { demoLabel, demoControlsDisabled } from "./demo.mjs?v=20";
-import { createApi, freshSpeechItems, TERMINAL } from "./api.mjs?v=20";
+import { demoLabel, demoControlsDisabled } from "./demo.mjs?v=22";
+import { createApi, freshSpeechItems, TERMINAL } from "./api.mjs?v=22";
 import { createFixture } from "./fixtures.mjs?v=20";
-import { actionFor, claimableSuccess, phaseFor, unverifiedSnapshot, verdictLabel } from "./presentation.mjs?v=20";
+import { actionFor, claimableSuccess, phaseFor, unverifiedSnapshot, verdictLabel } from "./presentation.mjs?v=22";
 import { eventChange, eventLabel, eventSource } from "./events.mjs?v=20";
 import { canSendAction, connectionLabel } from "./connection.mjs?v=20";
 import { evidenceReport, evidenceFilename } from "./evidence.mjs?v=20";
@@ -23,6 +23,7 @@ state.demo = null;
 state.demoInfo = null;
 state.demoUnverified = !fixtureMode;
 state.demoLoading = false;
+state.recoverRunId = null;
 const reads = createReadGate(() => state.runId);
 const signalFlow=createSignalFlow();
 // Capture nodes so a finishing animation never depends on a later global page.
@@ -60,8 +61,11 @@ $("resume-form").hidden = fixtureMode;
 
 function controls() {
   const run = state.run;
-  const cannotEdit = state.busy || state.startUnknown || Boolean(run && !TERMINAL.has(run.status));
-  $("restart").disabled = state.busy || state.startUnknown || state.demoUnverified || !run || !TERMINAL.has(run.status) || (!fixtureMode && state.connection!=="online");
+  const cannotEdit = state.busy || state.startUnknown || Boolean(state.recoverRunId) || Boolean(run && !TERMINAL.has(run.status));
+  $("recover-run").hidden = !state.recoverRunId;
+  $("recover-run").disabled = state.busy || state.demoLoading;
+  $("cancel").textContent = run?.status === "awaiting_clarification" ? "입력 수정하기" : "실행 취소";
+  $("restart").disabled = state.busy || state.startUnknown || Boolean(state.recoverRunId) || state.demoUnverified || !run || !TERMINAL.has(run.status) || (!fixtureMode && state.connection!=="online");
   $("preset-right").disabled = cannotEdit;
   $("preset-left").disabled = cannotEdit;
   $("demo-apply").disabled = !state.demoInfo || demoControlsDisabled(state);
@@ -74,7 +78,7 @@ function controls() {
     $("virtual-"+zone+"-"+operation).disabled = !virtual || !run?.simulation || state.busy || cancellingCurrentRun() || state.demoUnverified || state.connection !== "online" || run.status !== "awaiting_user";
   }
   const writable = canSendAction(fixtureMode ? "fixture" : "server", state.connection);
-  $("start").disabled = Boolean(state.demoInfo?.manageable && (!state.demo || !state.demo.virtual_cooktop || state.demoInfo.execution_mode === "real_llm" && state.demoInfo.api_key_configured === false)) || state.busy || state.startUnknown || state.demoUnverified || ["offline", "invalid", "unverified"].includes(state.connection) || Boolean(run && !TERMINAL.has(run.status));
+  $("start").disabled = Boolean(state.recoverRunId) || Boolean(state.demoInfo?.manageable && (!state.demo || !state.demo.virtual_cooktop || state.demoInfo.execution_mode === "real_llm" && state.demoInfo.api_key_configured === false)) || state.busy || state.startUnknown || state.demoUnverified || ["offline", "invalid", "unverified"].includes(state.connection) || Boolean(run && !TERMINAL.has(run.status));
   $("ack").disabled = state.busy || cancellingCurrentRun() || state.demoUnverified || !writable || !run?.instruction?.action_id || run.status !== "awaiting_user";
   $("cancel").disabled = state.busy || !writable || !run || TERMINAL.has(run.status);
   $("retry").disabled = state.busy || !state.runId || fixtureMode;
@@ -237,6 +241,7 @@ function render(run, announce = true) {
     if (speechAvailable) speechSynthesis.cancel();
     state.lastSpoken = "";
   }
+  if(state.recoverRunId===run.run_id)state.recoverRunId=null;
   state.run = run;
   state.runId = run.run_id;
   if (!fixtureMode) { state.connection = "online"; state.lastConfirmedAt = Date.now(); }
@@ -306,6 +311,13 @@ function observationWarning(run) {
 }
 function renderDemo(info) {
   state.demoInfo = info;
+  if(Object.hasOwn(info,"active_run_id")) {
+    state.recoverRunId=info.active_run_id && info.active_run_id!==state.runId?info.active_run_id:null;
+    if(state.recoverRunId) {
+      $("resume-id").value=state.recoverRunId;
+      $("status").textContent="진행 중인 실행이 있습니다. 불러온 뒤 종료하거나 이어서 진행하세요.";
+    }
+  }
   $("demo-execution-mode").value = ["mock_llm", "real_llm"].includes(info.execution_mode) ? info.execution_mode : "mock_llm";
   $("real-mode-option").disabled = info.api_key_configured === false;
   $("api-readiness").textContent = info.api_key_configured ? `API 키 설정됨 · 모델 ${info.model || "서버 설정"}. 실제 호출 성공은 실행 기록에서 확인하세요.` : "실제 AI 키 미설정 · 서버 .env에 키를 넣고 재시작하세요. 지금은 Mock LLM으로 연습할 수 있습니다.";
@@ -381,6 +393,7 @@ $("demo-apply").addEventListener("click", () => {
   transact(async () => {
     try { renderDemo(await api.configureDemoSettings($("demo-execution-mode").value, $("demo-scenario").value)); $("settings-panel").open = false; }
     catch (error) {
+      registerBusy(error);
       state.demoUnverified = state.demoUnverified || error.code === "connection" || error.code === "invalid_response" || error.status >= 500;
       $("demo-scenario").value = state.demoInfo.scenario;
       $("demo-status").textContent = `모의 입력 변경을 확인하지 못했습니다. 시연 설정 다시 확인을 누르세요. ${error.message}`;
@@ -396,6 +409,7 @@ $("demo-scenario").addEventListener("change", () => {
   transact(async () => {
     try { renderDemo(await api.configureDemo($("demo-scenario").value)); }
     catch (error) {
+      registerBusy(error);
       state.demoUnverified = true;
       $("demo-status").textContent = `선택 결과를 확인하지 못했습니다. 시연 설정 다시 확인을 누르세요. ${error.message}`;
     }
@@ -449,17 +463,32 @@ function startPolling() {
   stopPolling();
   if (!fixtureMode) state.polling = setInterval(refresh, 1500);
 }
+function registerBusy(error) {
+  if(error.code==="busy" && error.activeRunId) {
+    state.recoverRunId=error.activeRunId;
+    $("resume-id").value=error.activeRunId;
+    $("settings-panel").open=false;
+    $("phase").textContent="진행 중 실행 확인 필요";
+    $("instruction").textContent="진행 중 실행 불러오기를 눌러 기존 요청을 확인하세요.";
+    $("phase-detail").textContent="새 실행은 생성되지 않았습니다. 기존 실행을 불러온 뒤 종료하거나 이어서 진행하세요.";
+    state.lastSpoken="";
+    if(speechAvailable)speechSynthesis.cancel();
+    paintFlow(signalFlow.pause());
+    return true;
+  }
+  return false;
+}
 async function transact(task) {
   if (state.busy) return;
   state.busy = true; controls(); clearError();
   try { await task(); }
-  catch (error) { showError(error.message || "요청에 실패했습니다."); }
+  catch (error) { showError(registerBusy(error)?"진행 중인 실행이 있습니다. 진행 중 실행 불러오기를 누르세요.":error.message || "요청에 실패했습니다."); }
   finally { state.busy = false; controls(); }
 }
 $("goal-form").addEventListener("submit", event => {
   event.preventDefault();
   if (state.demoUnverified || state.demoInfo?.manageable && (!state.demo || !state.demo.virtual_cooktop || state.demoInfo.execution_mode === "real_llm" && state.demoInfo.api_key_configured === false)) { showError("실행 설정을 확인한 뒤 시작하세요."); return; }
-  if (state.run && !TERMINAL.has(state.run.status)) return;
+  if (state.recoverRunId || state.run && !TERMINAL.has(state.run.status)) return;
   transact(async () => {
     const input = $("user-input").value.trim();
     if (!input) throw new Error("목표를 입력하세요.");
@@ -526,16 +555,7 @@ $("goal-form").addEventListener("submit", event => {
     startPolling();
   });
 });
-$("resume-form").addEventListener("submit", event => {
-  event.preventDefault();
-  if (fixtureMode || state.run && !TERMINAL.has(state.run.status)) return;
-  transact(async () => {
-    const runId = $("resume-id").value.trim();
-    if (!runId) {
-      $("resume-id").setAttribute("aria-invalid", "true");
-      $("resume-id").focus();
-      throw new Error("조회할 실행 ID를 입력하세요.");
-    }
+async function resumeRun(runId) {
     $("resume-id").removeAttribute("aria-invalid");
     reads.invalidate();
     let run;
@@ -543,17 +563,41 @@ $("resume-form").addEventListener("submit", event => {
     catch (error) {
       if (error.code === "connection") markOffline(`실행 ID 조회 실패: ${error.message}`);
       else if (error.code === "invalid_response") markInvalid(`실행 ID 조회 실패: ${error.message}`);
-      else showError(`실행 ID를 조회할 수 없습니다: ${error.message}`);
+      else {
+        if(error.code==="unknown_run" && state.recoverRunId===runId) {
+          state.recoverRunId=null;
+          await loadDemo();
+        }
+        showError(`실행 ID를 조회할 수 없습니다: ${error.message}`);
+      }
       return;
     }
     stopPolling();
     state.seen.clear(); state.renderedEventIds = []; state.lastSpoken = "";
     state.submittedRequest = null;
     state.startUnknown = false;
+    if(run.status==="awaiting_clarification") {
+      // The reloaded page's default goal is not the recovered run's submitted input.
+      $("user-input").value="";
+      $("user-input").placeholder="입력 수정하기를 누른 뒤 목표를 다시 입력하세요.";
+    }
     render(run, false);
     clearError();
     if (!TERMINAL.has(run.status)) startPolling();
+  return true;
+}
+$("resume-form").addEventListener("submit", event => {
+  event.preventDefault();
+  if (fixtureMode || state.run && !TERMINAL.has(state.run.status)) return;
+  transact(async () => {
+    const runId=$("resume-id").value.trim();
+    if(!runId){$("resume-id").setAttribute("aria-invalid","true");$("resume-id").focus();throw new Error("조회할 실행 ID를 입력하세요.");}
+    await resumeRun(runId);
   });
+});
+$("recover-run").addEventListener("click",()=>{
+  if(fixtureMode || !state.recoverRunId || state.busy)return;
+  transact(async()=>{if(await resumeRun(state.recoverRunId))$("settings-panel").open=false;});
 });
 for(const zone of ["left","right"]) for(const operation of ["increase","decrease"]) {
   $("virtual-"+zone+"-"+operation).addEventListener("click",()=>{
@@ -582,6 +626,7 @@ $("ack").addEventListener("click", () => transact(async () => {
 }));
 $("cancel").addEventListener("click", () => transact(async () => {
   const runId = state.runId;
+  const editing = state.run?.status === "awaiting_clarification";
   if (!runId) return;
   state.cancelRequestedRunId = runId;
   reads.invalidate();
@@ -599,6 +644,10 @@ $("cancel").addEventListener("click", () => transact(async () => {
     render({ ...state.run, status: "stopped", instruction: null, verdict: null }, false);
   }
   if (!await refresh(true)) return;
+  if(editing && state.run?.status==="stopped") {
+    $("status").textContent="이전 요청을 종료했습니다. 목표를 수정하고 안내 시작을 누르세요.";
+    $("user-input").focus();
+  }
 }));
 $("repeat").addEventListener("click", () => speak(state.lastSpoken));
 $("export-evidence").addEventListener("click", event => {

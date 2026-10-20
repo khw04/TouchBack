@@ -6,11 +6,12 @@ const EVENT_KINDS = new Set(["plan", "instruction", "tool_call", "observation", 
 const VERDICT_STATUSES = new Set(["success", "mismatch", "uncertain"]);
 
 export class ApiError extends Error {
-  constructor(message, code = "connection", status = 0) {
+  constructor(message, code = "connection", status = 0, activeRunId = null) {
     super(message);
     this.name = "ApiError";
     this.code = code;
     this.status = status;
+    this.activeRunId = activeRunId;
   }
 }
 
@@ -75,6 +76,7 @@ export function validateRun(data, expectedId) {
 
 export function validateDemoMetadata(data) {
   if (!record(data) || typeof data.enabled !== "boolean") invalid("모의 입력 설정 형식이 다릅니다.");
+  if (data.active_run_id != null && !filled(data.active_run_id)) invalid("진행 중인 실행 ID가 유효하지 않습니다.");
   if (!data.enabled) {
     if (data.manageable !== true) return { enabled: false };
     if (typeof data.api_key_configured !== "boolean" || typeof data.model !== "string" ||
@@ -121,7 +123,8 @@ export function createApi(baseUrl = "", fetchImpl = fetch, { timeoutMs = 15000 }
       try { data = await response.json(); }
       catch { throw new ApiError("서버 응답을 읽을 수 없습니다.", "invalid_response", response.status); }
       if (!response.ok) throw new ApiError(record(data) && filled(data.message) ? data.message : "요청에 실패했습니다.",
-        record(data) && filled(data.code) ? data.code : "server_error", response.status);
+        record(data) && filled(data.code) ? data.code : "server_error", response.status,
+        response.status === 409 && data?.code === "busy" && filled(data.active_run_id) ? data.active_run_id : null);
       return data;
     };
     try { return await Promise.race([operation(), timeout]); }

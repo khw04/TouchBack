@@ -1,6 +1,6 @@
 const phases = {
   planning: ["1/3 · 목표 확인", "서버가 요청을 해석하고 조작 계획을 준비합니다."],
-  awaiting_clarification: ["1/3 · 목표 확인", "화구나 목표를 확인하세요. 이 실행을 취소한 뒤 새 요청으로 시작할 수 있습니다."],
+  awaiting_clarification: ["1/3 · 목표 확인", "입력 수정하기를 눌러 이 요청을 종료한 뒤, 왼쪽 또는 오른쪽 화력을 한 단계 올리는 목표로 다시 입력하세요."],
   awaiting_user: ["2/3 · 사용자 조작", "현재 안내를 듣고 직접 조작한 뒤 완료 알림을 누르세요."],
   observing: ["3/3 · 결과 확인", "서버가 센서 관측과 조작 결과를 확인하고 있습니다."],
   recovering: ["2/3 · 복구 안내", "새 안내가 나올 때까지 다시 조작하지 마세요."],
@@ -47,7 +47,7 @@ export function actionFor(run) {
   }
   return ({
     planning: "서버의 조작 계획을 기다리세요.",
-    awaiting_clarification: "화구와 목표를 명확히 입력해 새로 시작하세요.",
+    awaiting_clarification: "이 요청으로는 조작을 안내할 수 없어요. 입력 수정하기를 눌러 다시 작성하세요.",
     awaiting_user: "서버의 조작 안내를 기다리세요.",
     observing: "조작 결과를 확인하는 중입니다. 다시 누르지 마세요.",
     recovering: "복구 안내를 기다리세요. 다시 누르지 마세요.",

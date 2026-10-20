@@ -166,3 +166,4 @@ class CancelResponse(Contract):
 class ErrorResponse(Contract):
     code: Literal["validation", "unknown_run", "busy", "stale_action", "terminal_run"]
     message: str
+    active_run_id: Text | None = None
