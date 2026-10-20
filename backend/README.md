@@ -3,7 +3,7 @@
 검증 환경: Windows, Python 3.12.14. Python 3.12를 사용한다.
 공통 계약·Mock/Serial/Replay 어댑터·의도 검증·Mock 보정/상태, 실행 API·설정/Tool/provider, Agent 관측/검증·복구 코드가 PR #5~12로 병합됐다. PR #13은 Windows `.mjs` 응답 형식과 모듈 캐시를 수정했다.
 
-`/health`는 서버 구동 확인이며 `agent_ready: false`를 반환한다. 기본 생성 API는 `backend_stub`다. 현재 작업 브랜치에는 실제 LLM 호출/Tool 실행 루프·어댑터 주입·사용량 연결 코드와 명시적 Mock 시연이 있다. 실제 외부 호출과 사용량의 운영 검증은 C-YD-04의 남은 작업이다. 상세 진행은 [작업현황](../docs/작업현황.md)을 따른다.
+`/health`는 서버 구동 확인이며 `agent_ready: false`를 반환한다. 기본 생성 API는 `backend_stub`다. 실제 LLM 호출/Tool 실행 루프·어댑터 주입·사용량 연결과 센서 없는 시연은 main에 병합됐다. Claude+Mock 개발 호출 4개 경로는 [Agent 판단](../docs/Agent판단.md)에 기록했다. 추가 모델 성능/비용/지연 평가와 실물 검증은 별도다. 상세 진행은 [작업현황](../docs/작업현황.md)을 따른다.
 
 ## 설치와 실행 (PowerShell, 저장소 루트에서)
 

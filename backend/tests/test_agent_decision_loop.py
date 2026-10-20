@@ -248,3 +248,89 @@ def test_tool_facts_before_cancel_or_timeout_do_not_publish_a_decision(monkeypat
         assert not any('Agent 다음 행동 선택' in e['message'] for e in ended['events'])
         assert len([e for e in ended['events'] if '복구 토큰 메트릭' in e['message']])==1
         assert run_store.active_run_id()==next_run['run_id']
+
+
+@pytest.mark.parametrize('direction,rms',[('increase',120),('decrease',80)])
+@pytest.mark.parametrize('choice',['complete','stop'])
+def test_late_success_stop_does_not_publish_success_message(direction,rms,choice):
+    from app.adapters.virtual_cooktop import VirtualCooktopAdapter
+    from app.agent.orchestrator import AgentOrchestrator
+    from app.agent.verifier import IntentVerifier
+    from app.agent.decision_loop import decide_after_observation
+    from app.contracts.models import Goal
+    adapter=VirtualCooktopAdapter('normal','right')
+    adapter._pending.extend([
+        adapter.frame(10,500,3500,3500,100,0,zone='right'),
+        adapter.frame(11,500,3500,3500,100,None,zone='left'),
+        adapter.frame(12,500,3500,4000,rms,1,zone='right'),
+        adapter.frame(13,500,3500,4000,100,None,zone='left')])
+    orch=AgentOrchestrator(adapter=adapter,
+        verifier=IntentVerifier(calibration_provider=adapter.calibration_for_zone),
+        llm_provider=DecisionProvider(['inspect_observation','assess_retry_safety',choice]))
+    goal=Goal(zone_id='right',direction=direction,requested_steps=1)
+    async def execute():
+        verdict,feedback=await orch.execute_observation_and_verification(
+            goal,'act',run_id='run',window_start_ms=500,window_end_ms=3500)
+        assert verdict.status=='mismatch'
+        return await decide_after_observation(orch,goal=goal,verdict=verdict,
+            feedback=feedback,retry_count=0,run_id='run',action_id='act',
+            window_start_ms=500,window_end_ms=3500,is_current=lambda:True)
+    verdict,feedback,retry=asyncio.run(execute())
+    assert retry is None
+    if choice=='complete':
+        assert verdict.status=='success' and verdict.goal_satisfied is True
+        assert '중단' not in orch.diagnosis['message']
+    else:
+        assert verdict.status=='uncertain' and verdict.goal_satisfied is None
+        assert 'agent_stopped' in verdict.reason_codes
+        assert '중단' in orch.diagnosis['message']
+        assert '확인했습니다' not in orch.diagnosis['message']
+        assert orch.diagnosis['correction'] is None
+        assert '직접 확인' in orch.diagnosis['next_action']
+
+
+def test_cancelled_initial_plan_preserves_usage_without_publishing_or_unlocking_next_run(monkeypatch):
+    class HeldProvider(DecisionProvider):
+        def __init__(self):
+            super().__init__([])
+            self.release=threading.Event()
+            self.count=0
+        async def generate(self,messages,tools=None):
+            self.count+=1
+            if self.count==1:
+                self.entered.set()
+                assert await asyncio.to_thread(self.release.wait,5)
+            return await super().generate(messages,tools)
+    provider=HeldProvider()
+    monkeypatch.setattr('app.api.runs.get_llm_provider',lambda **_:provider)
+    response=[]
+    errors=[]
+    with client() as c:
+        def create():
+            try:
+                response.append(c.post('/api/runs',json={
+                    'user_input':'오른쪽 화력 한 단계 올려줘','zone_id':'right','source':'mock'}))
+            except BaseException as exc:
+                errors.append(exc)
+        worker=threading.Thread(target=create)
+        worker.start()
+        try:
+            assert provider.entered.wait(3)
+            rid=run_store.active_run_id()
+            assert c.post('/api/runs/'+rid+'/cancel').json()['status']=='stopped'
+            following=begin(c)
+            assert run_store.active_run_id()==following['run_id']
+        finally:
+            provider.release.set()
+            worker.join(8)
+        assert not worker.is_alive() and not errors
+        assert response[0].status_code==201 and response[0].json()['status']=='stopped'
+        for _ in range(2):
+            ended=c.get('/api/runs/'+rid).json()
+            assert ended['status']=='stopped' and ended['instruction'] is None
+            metrics=[e for e in ended['events'] if 'LLM 계획 토큰 메트릭:' in e['message']]
+            assert len(metrics)==1
+            assert 'calls: 1, tokens: 15 (prompt: 10, completion: 5)' in metrics[0]['message']
+            assert c.post('/api/runs/'+rid+'/cancel').json()['status']=='stopped'
+        assert run_store.active_run_id()==following['run_id']
+        assert c.get('/api/runs/'+following['run_id']).json()['status']=='awaiting_user'

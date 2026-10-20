@@ -447,6 +447,16 @@ class RunStore:
             now_after_plan = self._now_utc()
             self._check_and_expire(current_state, now_after_plan)
 
+            # 완료된 모델 호출의 비용 기록은 계획 게시 여부와 독립적으로 보존한다.
+            # reset 후 같은 ID의 새 실행이 생겨도 과거 호출을 그 실행에 붙이지 않는다.
+            if usage_msg and current_state is state:
+                self._add_event(
+                    current_state,
+                    kind="plan",
+                    message=f"LLM 계획 토큰 메트릭: {usage_msg}",
+                    action_id=action_id,
+                )
+
             # 취소(cancel) 또는 대기 만료 등으로 상태/세대가 변경된 경우 계획 결과를 덮어쓰지 않음
             if (
                 current_state.status != "planning"
@@ -484,15 +494,6 @@ class RunStore:
                     if tc.get("origin") == "required_preflight" or tool_name in ("check_sensor_integrity", "read_field", "state_resynchronization", "check_supported_change"):
                         sensor_fault_detected = True
                         sensor_fault_reason = err_text
-
-            # 2. 모델 토큰 사용량 기록 (실패/센서이상/정상 모두 공통 보존)
-            if usage_msg:
-                self._add_event(
-                    current_state,
-                    kind="plan",
-                    message=f"LLM 계획 토큰 메트릭: {usage_msg}",
-                    action_id=action_id,
-                )
 
             # 3. 처리 불가능한 치명적 모델 오류(인증/한도/타임아웃/응답형식 등) 발생 시 명시적 실패(failed) 종료
             if planning_error is not None:

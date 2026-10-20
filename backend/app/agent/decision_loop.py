@@ -101,7 +101,7 @@ async def decide_after_observation(orch, *, goal, verdict, feedback, retry_count
             if selected=='stop':
                 if orch.diagnosis:
                     orch.diagnosis={**orch.diagnosis,'correction':None,
-                        'message':orch.diagnosis['message'] if verdict.status!='success' else '관측은 확인했으나 Agent가 추가 진행을 중단했습니다.',
+                        'message':orch.diagnosis['message'] if verdict.status!='success' and not late else '관측은 확인했으나 Agent가 추가 진행을 중단했습니다.',
                         'next_action':'현재 인덕션 상태를 직접 확인하세요.'}
                 feedback='현재 관측 근거로 실행을 종료합니다. 추가 조작을 멈추고 상태를 직접 확인하세요.'
             return stopped,feedback,None
