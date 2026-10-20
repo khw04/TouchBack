@@ -61,10 +61,10 @@ def metadata(request: Request):
         return {"enabled": False}
     active_run_id = run_store.active_run_id()
     if not enabled(request):
-        return {"enabled": False, "manageable": True, "active_run_id": active_run_id, "api_key_configured": settings.is_openai_configured(),
+        return {"enabled": False, "manageable": True, "active_run_id": active_run_id, "virtual_levels":run_store.virtual_device_view(), "api_key_configured": settings.is_openai_configured(),
                 "model": settings.openai_model, "execution_mode": settings.execution_mode,
                 "scenario": settings.mock_scenario, "scenarios": list(SCENARIOS)}
-    return {"enabled": True, "manageable": True, "active_run_id": active_run_id, "api_key_configured": settings.is_openai_configured(),
+    return {"enabled": True, "manageable": True, "active_run_id": active_run_id, "virtual_levels":run_store.virtual_device_view(), "api_key_configured": settings.is_openai_configured(),
             "model": settings.openai_model, "virtual_cooktop": run_store.virtual_demo, "source": "mock", "execution_mode": settings.execution_mode,
             "scenario": settings.mock_scenario, "scenarios": list(SCENARIOS),
             "physical_validation_performed": False}
@@ -79,4 +79,13 @@ def configure(req: ScenarioRequest, request: Request):
     if origin is not None and origin != str(request.base_url).rstrip("/"):
         raise RunApiException(403, "validation", "같은 출처의 로컬 시연 화면에서만 변경할 수 있습니다.")
     run_store.configure_mock_scenario(req.scenario)
+    return metadata(request)
+
+
+@router.post("/device/reset")
+def reset_device(request: Request):
+    require_local_write(request)
+    if not enabled(request):
+        raise RunApiException(403,"validation","시연을 먼저 활성화하세요.")
+    run_store.reset_virtual_device()
     return metadata(request)

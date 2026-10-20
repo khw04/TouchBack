@@ -1,5 +1,6 @@
 """Intent output verification bridge using C-KH-03 verify_intent and MockCalibration."""
 from pathlib import Path
+from typing import Callable
 
 from app.contracts.models import Goal, Observation, Verdict, Zone
 from app.verification.models import ActionContext, MockCalibration
@@ -43,15 +44,18 @@ def load_default_mock_calibration() -> MockCalibration:
 class IntentVerifier:
     """공통 verify_intent 계약을 연결하는 의도 검증 브리지."""
 
-    def __init__(self, calibration: MockCalibration | None = None) -> None:
+    def __init__(self, calibration: MockCalibration | None = None, *, calibration_provider: Callable[[Zone], MockCalibration | None] | None = None) -> None:
         self._calibration = calibration or load_default_mock_calibration()
+        self._calibration_provider = calibration_provider
 
     @property
     def calibration(self) -> MockCalibration:
         return self._calibration
 
-    def get_calibration_for_zone(self, zone_id: Zone) -> MockCalibration:
+    def get_calibration_for_zone(self, zone_id: Zone) -> MockCalibration | None:
         """지정된 화구에 맞는 MockCalibration 프로필 반환."""
+        if self._calibration_provider is not None:
+            return self._calibration_provider(zone_id)
         if self._calibration.zone_id == zone_id:
             return self._calibration
         return self._calibration.model_copy(update={"zone_id": zone_id})

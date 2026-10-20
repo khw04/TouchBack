@@ -72,22 +72,29 @@ class ZoneState:
         self.reason="state_resynchronized"
         return True
 
-    def verify(self, goal: Goal, observations: list[Observation], context: ActionContext, *, no_change_tolerance: float=2.0, increase_min: float=5.0) -> Verdict:
+    def calibration(self, *, no_change_tolerance: float=2.0, increase_min: float=5.0) -> MockCalibration | None:
         p=self._candidate; baseline=self._baseline
         if p is None or baseline is None or self.level is None or self.status!="ready":
-            return verdict("uncertain","none",None,[self.reason],[])
-        if goal.zone_id!=self.zone_id:
-            return verdict("uncertain","none",None,["zone_mismatch"],[])
+            return None
         signature=next(item for item in p.signatures if item.level==self.level)
         rms=baseline.device_observation.field_summary.rms
         try:
             bands=[StepBand(steps=item.level-self.level,delta_min=item.rms_min-rms,delta_max=item.rms_max-rms) for item in p.signatures if item.level!=self.level]
-            profile=MockCalibration(source="mock",calibration_id=p.calibration_id,device_id=p.device_id,session_id=p.session_id,zone_id=p.zone_id,
+            return MockCalibration(source="mock",calibration_id=p.calibration_id,device_id=p.device_id,session_id=p.session_id,zone_id=p.zone_id,
                 unit=p.unit,method=p.method,sample_rate_hz=p.sample_rate_hz,baseline_rms_min=signature.rms_min,baseline_rms_max=signature.rms_max,
                 no_change_tolerance=no_change_tolerance,increase_min=increase_min,min_observation_ms=500,max_baseline_age_ms=500,max_observation_age_ms=5000,max_transport_delay_ms=4000,step_bands=bands)
         except ValueError:
+            return None
+
+    def verify(self, goal: Goal, observations: list[Observation], context: ActionContext, *, no_change_tolerance: float=2.0, increase_min: float=5.0) -> Verdict:
+        if self.status!="ready":
+            return verdict("uncertain","none",None,[self.reason],[])
+        if goal.zone_id!=self.zone_id:
+            return verdict("uncertain","none",None,["zone_mismatch"],[])
+        profile=self.calibration(no_change_tolerance=no_change_tolerance,increase_min=increase_min)
+        if profile is None:
             return verdict("uncertain","none",None,["calibration_resolution_insufficient"],[])
-        return verify_intent(goal,baseline,observations,context,profile)
+        return verify_intent(goal,self._baseline,observations,context,profile)
 
     def snapshot(self) -> dict:
         return {"zone_id":self.zone_id,"status":self.status,"reason":self.reason,"level":self.level,

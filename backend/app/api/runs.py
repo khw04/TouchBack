@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict
 
 from app.adapters.demo_setup import build_demo_adapter
 from app.adapters.virtual_cooktop import VirtualCooktopAdapter
+from app.agent.verifier import IntentVerifier
 from app.agent.orchestrator import FATAL_LLM_ERRORS, AgentOrchestrator
 from app.agent.recovery import RecoveryDecisionType
 from app.config import settings
@@ -118,6 +119,7 @@ class RunStore:
         self._active_run_id: str | None = None
         self._clock = clock
         self.virtual_demo = False
+        self.virtual_levels = {"left":5,"right":5}
 
     def set_clock(self, clock: Callable[[], datetime] | None) -> None:
         with self._lock:
@@ -129,6 +131,7 @@ class RunStore:
             self._active_run_id = None
             self._clock = None
             self.virtual_demo = False
+            self.virtual_levels = {"left":5,"right":5}
 
     def _now_utc(self) -> datetime:
         if self._clock is not None:
@@ -210,6 +213,19 @@ class RunStore:
                 return None
             self._check_and_expire(state, self._now_utc())
             return state.run_id if state.status not in TERMINAL_STATUSES else None
+
+    def virtual_device_view(self) -> dict:
+        with self._lock:
+            return dict(self.virtual_levels)
+
+    def reset_virtual_device(self) -> None:
+        with self._lock:
+            current=self._runs.get(self._active_run_id) if self._active_run_id else None
+            if current:
+                self._check_and_expire(current,self._now_utc())
+                if current.status not in TERMINAL_STATUSES:
+                    raise RunApiException(409,"busy","실행 종료 후 가상 화력을 초기화하세요.",active_run_id=current.run_id)
+            self.virtual_levels={"left":5,"right":5}
 
     def configure_demo(self, mode: str, scenario: str) -> None:
         from app.adapters.demo_setup import SCENARIOS
@@ -356,7 +372,7 @@ class RunStore:
                 created_at=now,
                 status_updated_at=now,
             )
-            adapter = VirtualCooktopAdapter(settings.mock_scenario, goal.zone_id) if self.virtual_demo and req.source == "mock" and exec_mode != "backend_stub" else resolve_adapter_for_run(temp_state)
+            adapter = VirtualCooktopAdapter(settings.mock_scenario, goal.zone_id, self.virtual_levels) if self.virtual_demo and req.source == "mock" and exec_mode != "backend_stub" else resolve_adapter_for_run(temp_state)
             temp_state.adapter = adapter
 
             state = temp_state
@@ -380,9 +396,11 @@ class RunStore:
         if exec_mode in ("mock_llm", "real_llm"):
             provider = get_llm_provider(mode=exec_mode)
             tool_registry = create_registry_from_adapter(
-                adapter, source=req.source, run_id=run_id, zone_id=goal.zone_id, for_planning=True
+                adapter, source=req.source, run_id=run_id, zone_id=goal.zone_id, for_planning=True,
+                calibration=adapter.calibration_for_zone(goal.zone_id) if isinstance(adapter,VirtualCooktopAdapter) else None,
             )
-            orch = AgentOrchestrator(llm_provider=provider, adapter=adapter, tool_registry=tool_registry)
+            orch = AgentOrchestrator(llm_provider=provider, adapter=adapter, tool_registry=tool_registry,
+                                     verifier=IntentVerifier(calibration_provider=adapter.calibration_for_zone) if isinstance(adapter,VirtualCooktopAdapter) else None)
 
             async def plan_with_required_checks():
                 planned_goal, planned_instruction, message, _ = await orch.plan_and_instruct(
@@ -591,6 +609,7 @@ class RunStore:
             if state.status!="awaiting_user" or state.current_action_id!=action_id or self._active_run_id!=run_id:
                 raise RunApiException(409,"stale_action","현재 조작 안내를 확인하세요.")
             adapter.press(action_id,zone,operation,state.action_window_start_ms,state.action_window_end_ms)
+            self.virtual_levels = dict(adapter.levels)
             state.status="observing"
             state.last_acked_action_id=action_id
             state.status_updated_at=self._now_utc()
@@ -728,8 +747,10 @@ class RunStore:
             provider = get_llm_provider(mode=state.execution_mode)
             tool_registry = create_registry_from_adapter(
                 adapter, source=state.source, run_id=run_id, zone_id=goal.zone_id,
+                calibration=adapter.calibration_for_zone(goal.zone_id) if isinstance(adapter,VirtualCooktopAdapter) else None,
             )
-            orch = AgentOrchestrator(llm_provider=provider, adapter=adapter, tool_registry=tool_registry)
+            orch = AgentOrchestrator(llm_provider=provider, adapter=adapter, tool_registry=tool_registry,
+                                     verifier=IntentVerifier(calibration_provider=adapter.calibration_for_zone) if isinstance(adapter,VirtualCooktopAdapter) else None)
 
         recovery_llm_error: Exception | None = None
         recovery_checks: list[dict[str, Any]] = []

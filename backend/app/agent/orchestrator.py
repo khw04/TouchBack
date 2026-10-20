@@ -108,6 +108,7 @@ class AgentOrchestrator:
         self.usage = UsageSummary()
         self.executed_tool_calls: list[dict[str, Any]] = []
         self._action_baselines: dict[tuple, Observation | None] = {}
+        self._action_profiles = {}
 
     def interpret_goal(
         self,
@@ -308,6 +309,8 @@ class AgentOrchestrator:
         # may become the next action's baseline, never this action's reference.
         key = (run_id, action_id, goal.zone_id, window_start_ms, window_end_ms)
         self._action_baselines = {key: baseline.model_copy(deep=True) if baseline else None}
+        calibration = self.verifier.get_calibration_for_zone(goal.zone_id)
+        self._action_profiles = {key: calibration}
 
         # 2. 터치 관측 결과 수집
         observations: list[Observation] = []
@@ -352,6 +355,7 @@ class AgentOrchestrator:
             baseline=baseline,
             observations=observations,
             context=context,
+            calibration=calibration,
         )
 
         feedback = get_verdict_message(verdict.status, verdict.verification_level)
@@ -406,6 +410,7 @@ class AgentOrchestrator:
 
         key = (run_id, action_id, goal.zone_id, window_start_ms, window_end_ms)
         baseline = self._action_baselines.pop(key, None)
+        original_profile = self._action_profiles.pop(key, None)
         now_ms = getattr(getattr(self.adapter, "clock", None), "now_ms", window_end_ms)
         if now_ms < window_end_ms:
             now_ms = window_end_ms
@@ -423,6 +428,7 @@ class AgentOrchestrator:
                 baseline=baseline,
                 observations=delayed_obs,
                 context=delayed_context,
+                calibration=original_profile,
             )
 
         # 2. 센서 무결성 점검
