@@ -61,7 +61,8 @@ def test_remote_controls_not_exposed(host):
 def test_disabled_stub_cross_origin_and_invalid_scenario_are_rejected(monkeypatch):
     with TestClient(app,base_url="http://127.0.0.1",client=("127.0.0.1",50000)) as client:
         monkeypatch.setattr(settings,"demo_enabled",False)
-        assert client.get('/api/demo').json()=={"enabled":False}
+        assert client.get('/api/demo').json()["enabled"] is False
+        assert client.get('/api/demo').json()["manageable"] is True
         monkeypatch.setattr(settings,"demo_enabled",True)
         monkeypatch.setattr(settings,"execution_mode","backend_stub")
         assert client.post('/api/demo/scenario',json={"scenario":"normal"}).status_code==403
