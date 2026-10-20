@@ -23,4 +23,3 @@ def test_paired_original_action_late_success_reports_goal_direction(direction,la
     assert recovered.updated_verdict.status=='success' and recovered.updated_verdict.goal_satisfied
     assert recovered.instruction is None
     assert expected in recovered.message and wrong not in recovered.message
-
