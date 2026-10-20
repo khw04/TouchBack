@@ -892,3 +892,109 @@ test("stopped and failed summaries do not reuse a preceding no-change verdict",a
  assert.doesNotMatch(screenSummary({...run,status:'stopped'}).result,/출력 변화/);
  assert.match(screenSummary({...run,status:'failed'}).result,/오류/);
 });
+
+
+function signalRun({id='flow-run',action='flow-action',status='succeeded',beep=1,rms=120,quality='valid',observations=true}={}) {
+ const device={source:'mock',zone_id:'right',beep_count:beep,field_summary:rms===null?null:{rms,unit:'adc_count'},quality:{status:quality}};
+ return {run_id:id,source:'mock',status,simulation:{kind:'virtual_cooktop',levels:{left:5,right:6},last_press:{action_id:action},
+  baselines:{[action]:{observation_id:'baseline',device_observation:{field_summary:{rms:100,unit:'adc_count'}}}},
+  observations:observations?[{run_id:id,action_id:action,observation_id:'receipt-1',device_observation:device}]:[]}};
+}
+
+test('signal flow waits for consumed evidence and animates each receipt only once',async()=>{
+ const {createSignalFlow}=await import('../../frontend/signals.mjs');const flow=createSignalFlow();
+ assert.equal(flow.update(signalRun({status:'observing',observations:false})).phase,'waiting');
+ const delivered=flow.update(signalRun());assert.equal(delivered.phase,'delivering');assert.equal(delivered.beepLabel,'1회');assert.equal(delivered.fieldLabel,'Δ +20');
+ assert.equal(flow.update(signalRun()).sequence,delivered.sequence);
+ flow.finish(delivered.sequence);
+ assert.equal(flow.update(signalRun()).phase,'received');
+ const next=signalRun({action:'new-action'});assert.equal(flow.update(next).phase,'delivering');
+ assert.equal(flow.update(signalRun({id:'new-run',action:'new-action'})).phase,'delivering');
+});
+
+test('zero change is delivered neutrally; missing and invalid channels never emit healthy packets',async()=>{
+ const {createSignalFlow}=await import('../../frontend/signals.mjs');
+ const zero=createSignalFlow().update(signalRun({status:'awaiting_user',beep:0,rms:100}));
+ assert.equal(zero.phase,'delivering');assert.equal(zero.beepLabel,'0회');assert.equal(zero.fieldLabel,'Δ 0');assert.match(zero.note,/변화 없음/);
+ for(const quality of ['invalid','degraded']){
+  const bad=createSignalFlow().update(signalRun({beep:null,rms:null,quality,status:'uncertain'}));
+  assert.equal(bad.phase,'received');assert.equal(bad.beep,'warning');assert.equal(bad.field,'warning');assert.match(bad.note,/누락\/품질/);
+ }
+ const partialFlow=createSignalFlow();const partial=partialFlow.update(signalRun({beep:null,status:'uncertain'}));
+ assert.equal(partial.beep,'warning');assert.equal(partial.field,'delivering');
+ assert.match(partialFlow.finish(partial.sequence).note,/누락\/품질/);
+ const absent=createSignalFlow().update(signalRun({observations:false,status:'uncertain'}));
+ assert.equal(absent.phase,'idle');assert.doesNotMatch(absent.note,/전달됨/);
+});
+
+test('signal flow excludes stale actions, other runs and non-Mock observations',async()=>{
+ const {createSignalFlow}=await import('../../frontend/signals.mjs');
+ for(const mutate of [r=>r.simulation.observations[0].action_id='old',r=>r.simulation.observations[0].run_id='other',r=>r.simulation.observations[0].device_observation.source='live',r=>r.source='live']){
+  const run=signalRun();mutate(run);assert.equal(createSignalFlow().update(run).phase,'idle');
+ }
+});
+
+test('cancel, unknown state and reduced motion stop packets without replaying old evidence',async()=>{
+ const {createSignalFlow}=await import('../../frontend/signals.mjs');const flow=createSignalFlow();
+ const first=flow.update(signalRun());flow.pause();assert.equal(flow.finish(first.sequence).phase,'blocked');
+ assert.equal(flow.update(signalRun()).phase,'received');
+ const unknown=createSignalFlow();assert.equal(unknown.update(signalRun(),{blocked:true}).phase,'blocked');assert.equal(unknown.update(signalRun()).phase,'received');
+ for(const status of ['stopped','failed'])assert.equal(createSignalFlow().update(signalRun({status})).phase,'blocked');
+ const quiet=createSignalFlow();assert.equal(quiet.update(signalRun(),{reducedMotion:true}).phase,'received');
+ assert.equal(quiet.update(signalRun()).phase,'received');
+ const moving=createSignalFlow();moving.update(signalRun());assert.equal(moving.update(signalRun(),{reducedMotion:true}).phase,'received');
+});
+
+test('actual app renders a consumed receipt once and masks animation on failed state lookup',async()=>{
+ const {loadApp,ok,demoMetadata,activeRun}=await import('./app-harness.mjs');let broken=false;
+ const ended={...activeRun,...signalRun({id:activeRun.run_id}),execution_mode:'mock_llm',instruction:null,verdict:{status:'uncertain',reason_codes:[],evidence_ids:[]},status:'uncertain'};
+ const app=await loadApp(async(url)=>{if(url==='/api/demo')return ok({...demoMetadata,virtual_cooktop:true});if(broken)throw new Error('offline');return ok(ended);});
+ try{
+  await app.el('goal-form').fire('submit');
+  assert.equal(app.el('signal-flow').attributes.get('data-phase'),'delivering');
+  const sequence=app.el('signal-flow').attributes.get('data-sequence');
+  await app.el('retry').fire('click');assert.equal(app.el('signal-flow').attributes.get('data-sequence'),sequence);
+  broken=true;await app.el('retry').fire('click');assert.equal(app.el('signal-flow').attributes.get('data-phase'),'blocked');
+  broken=false;await app.el('retry').fire('click');assert.equal(app.el('signal-flow').attributes.get('data-phase'),'received');
+ }finally{app.close();}
+});
+
+test('actual app cancels a moving receipt immediately and resets it before the next start response',async()=>{
+ const {loadApp,ok,demoMetadata,activeRun}=await import('./app-harness.mjs');let cancelled=false,startResolve,starts=0;
+ const run={...activeRun,...signalRun({id:activeRun.run_id,status:'awaiting_user'}),instruction:activeRun.instruction};
+ const app=await loadApp(async(url,options)=>{
+  if(url==='/api/demo')return ok({...demoMetadata,virtual_cooktop:true});
+  if(url==='/api/runs' && options.method==='POST' && ++starts===2)return new Promise(resolve=>{startResolve=resolve;});
+  if(url.endsWith('/cancel')){cancelled=true;return ok({run_id:run.run_id,status:'stopped'});}
+  return ok(cancelled?{...run,status:'stopped',instruction:null}:run);
+ });
+ try{
+  await app.el('goal-form').fire('submit');assert.equal(app.el('signal-flow').attributes.get('data-phase'),'delivering');
+  await app.el('cancel').fire('click');assert.equal(app.el('signal-flow').attributes.get('data-phase'),'blocked');
+  const pending=app.el('goal-form').fire('submit');await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(app.el('signal-flow').attributes.get('data-phase'),'idle');assert.equal(app.el('flow-beep-label').textContent,'대기');
+  startResolve(ok({...run,status:'stopped',instruction:null}));await pending;
+ }finally{app.close();}
+});
+
+
+test('actual app shows waiting without packets until the observation response arrives',async()=>{
+ const {loadApp,ok,demoMetadata,activeRun,flush}=await import('./app-harness.mjs');let stepResolve;
+ const sim=signalRun({id:activeRun.run_id,status:'observing',observations:false}).simulation;
+ const initial={...activeRun,simulation:{...sim,last_press:null}};
+ const observed={...activeRun,status:'observing',simulation:sim};
+ const ended={...activeRun,...signalRun({id:activeRun.run_id,status:'uncertain'}),instruction:null,verdict:{status:'uncertain',reason_codes:[],evidence_ids:[]}};
+ const app=await loadApp(async(url)=>{
+  if(url==='/api/demo')return ok({...demoMetadata,virtual_cooktop:true});
+  if(url.endsWith('/press'))return ok(observed);
+  if(url.endsWith('/step'))return new Promise(resolve=>{stepResolve=resolve;});
+  return ok(initial);
+ });
+ try{
+  await app.el('goal-form').fire('submit');await app.el('virtual-right-increase').fire('click');
+  assert.equal(app.el('signal-flow').attributes.get('data-phase'),'waiting');
+  assert.equal(app.el('signal-flow').attributes.get('data-beep'),'idle');
+  stepResolve(ok(ended));await flush();
+  assert.equal(app.el('signal-flow').attributes.get('data-phase'),'delivering');
+ }finally{app.close();}
+});
