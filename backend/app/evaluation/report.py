@@ -93,7 +93,8 @@ def evaluate(trials: list[ReferenceTrial], outcomes: list[Outcome]) -> dict:
         for trial, outcome in entries:
             included = trial.exclusion_reason is None
             known = trial.reference_source != "unavailable" and trial.before_level is not None and trial.after_level is not None
-            expected = trial.after_level - trial.before_level == trial.goal.requested_steps if known else None
+            target_delta = trial.goal.requested_steps * (-1 if trial.goal.direction == "decrease" else 1)
+            expected = trial.after_level - trial.before_level == target_delta if known else None
             confirmed = outcome is not None and outcome.status == "succeeded"
             row = {"trial_id": trial.trial_id, "run_id": trial.run_id, "action_id": trial.action_id,
                    "included": included, "exclusion_reason": trial.exclusion_reason,
