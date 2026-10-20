@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>TouchBack · Agent 시연</title>
-  <link rel="stylesheet" href="./style.css?v=5">
+  <link rel="stylesheet" href="./style.css?v=6">
 </head>
 <body>
 <main>
@@ -12,6 +12,8 @@
     <div class="brand"><span class="brand-mark" aria-hidden="true">T</span><div><p class="eyebrow">TOUCHBACK</p><h1 id="page-title">조작에서 확인까지</h1></div></div>
     <div class="header-state"><strong id="screen-mode">모델 확인 중</strong><span id="screen-source">입력 확인 중</span></div>
     <nav class="toolbar" aria-label="시연 도구">
+      <label class="quick-scenario">시연 상황<select id="demo-scenario" aria-label="시연 상황" disabled></select></label>
+      <button id="restart" type="button" class="quiet" disabled>다시 시연</button>
       <button id="large-text" type="button" class="quiet" aria-pressed="false">큰 글씨 켜기</button>
       <details id="settings-panel" class="drawer">
         <summary id="settings-toggle">시연 설정</summary>
@@ -23,13 +25,13 @@
             <label for="demo-execution-mode">AI 실행 방식</label><select id="demo-execution-mode"><option value="mock_llm">Mock LLM · 비용 없는 흐름 연습</option><option id="real-mode-option" value="real_llm">실제 AI · 서버 API 키 사용</option></select>
             <p id="api-readiness" class="hint"></p>
             <p class="hint">실물 인덕션을 조작하지 마세요. 현재는 완료 알림으로 모의 관측을 진행합니다. 시나리오를 바꾸면 즉시 서버에 적용합니다.</p>
-            <label for="demo-scenario">모의 입력</label><select id="demo-scenario"></select>
+            <p class="hint">모의 입력은 상단 시연 상황에서 선택합니다.</p>
             <div class="actions"><button id="demo-apply" type="button">시연 설정 적용</button><button id="demo-reload" type="button" class="secondary">시연 설정 다시 확인</button></div>
             <p id="demo-status" role="status" aria-live="polite"></p>
           </section>
           <div class="grid">
             <label>입력 출처<select id="source" form="goal-form"><option value="mock">모의 관측</option><option value="replay">녹화 재생</option><option value="live">실시간 센서</option></select></label>
-            <label>화구<select id="zone" form="goal-form"><option value="right">오른쪽</option><option value="left">왼쪽</option><option value="">입력에서 해석</option></select></label>
+            <label>화구<select id="zone" form="goal-form"><option value="">입력에서 해석</option><option value="right">오른쪽</option><option value="left">왼쪽</option></select></label>
           </div>
           <div id="fixture-options" class="fixture-options" hidden>
             <label for="fixture-scenario">화면 연습 시나리오</label>
@@ -60,6 +62,7 @@
       </details>
     </nav>
   </header>
+  <a class="skip-link" href="#user-input">목표 입력으로 이동</a>
   <p id="page-description" class="intro">목표를 입력하고 현재 안내를 따라 진행하세요. 입력 출처와 모델은 상단에서 확인할 수 있습니다.</p>
   <section class="request-card" aria-labelledby="input-title">
     <div class="section-label"><span class="step-number">01</span><h2 id="input-title">어떤 조작을 도와드릴까요?</h2></div>
@@ -94,11 +97,11 @@
       <div class="signal-block"><span class="signal-icon" aria-hidden="true">⌁</span><h3>센서 관측</h3><p id="sensor-stage">관측 대기</p><dl class="sensor-readings" aria-live="polite"><div><dt>비프음</dt><dd id="signal-beep">—</dd></div><div><dt>자기장 RMS</dt><dd id="signal-field">—</dd></div><div><dt>기준 대비</dt><dd id="signal-delta">—</dd></div><div><dt>관측 품질</dt><dd id="signal-quality">확인 전</dd></div></dl>
         <meter id="field-meter" min="0" max="200" value="0" aria-label="모의 자기장 RMS 크기" hidden></meter><p id="signal-note" class="hint">수집된 모의 관측이 없습니다.</p></div>
       <div class="signal-block"><span class="signal-icon" aria-hidden="true">◇</span><h3>Agent 진행</h3><p id="agent-stage">요청 대기</p><p id="agent-stage-detail" class="hint">서버가 확인한 진행 상태만 표시합니다.</p><ol id="agent-trail" class="agent-trail" aria-label="최근 서버 처리 과정"></ol></div>
-      <div class="result-block"><h3>판정 요약</h3><p id="result-summary" role="status" aria-live="polite">아직 판정이 없습니다.</p></div>
+      <div class="result-block sr-only"><h3>판정 요약</h3><p id="result-summary" role="status" aria-live="polite">아직 판정이 없습니다.</p></div>
     </aside>
   </section>
   <footer><span>사용자 조작 → 관측 → 검증 → 필요 시 복구</span><span>모의 관측은 실물 성능 검증이 아닙니다.</span></footer>
 </main>
-<script type="module" src="./app.mjs?v=19"></script>
+<script type="module" src="./app.mjs?v=20"></script>
 </body>
 </html>

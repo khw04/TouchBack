@@ -14,7 +14,7 @@ export function signalsFor(run) {
   const quality=qualities.includes("invalid")?"불량":qualities.includes("degraded")?"저하":"정상";
   const previous=run.status==="awaiting_user" && run.instruction?.action_id!==actionId;
   return {beep:beeps===null?"확인 불가":`${beeps}회`,field:field?`${field.rms} ${field.unit}`:"관측 누락",delta:delta===null?"확인 불가":`${delta>0?"+":""}${Math.round(delta*100)/100}`,
-    quality,rms:field?.rms??null,note:`${previous?"이전 조작 · ":""}수집한 모의 관측 ${items.length}건 · 비프음만으로 성공을 판정하지 않습니다.`,key:items.map(item=>item.observation_id).join(":")};
+    quality,rms:field?.rms??null,note:`${previous?"이전 조작 · ":""}수집한 모의 관측 ${items.length}건`,key:items.map(item=>item.observation_id).join(":")};
 }
 
 export function trailFor(run) {

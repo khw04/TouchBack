@@ -525,7 +525,7 @@ test("actual app speech harness exercises both supported and unsupported browser
     try {
       await app.el('goal-form').fire('submit');
       assert.equal(app.el('auto-speech').disabled,speechSupported?false:true);
-      assert.deepEqual(app.spoken,speechSupported?[activeRun.instruction.text]:[]);
+      assert.deepEqual(app.spoken,speechSupported?[`모의 시연. ${activeRun.instruction.text}`]:[]);
     } finally {app.close();}
   }
 });
@@ -668,7 +668,7 @@ test("a new goal after cancellation can speak its own instruction", async () => 
     const before=app.spoken.length;
     app.el('user-input').value='왼쪽 화력 올려줘';app.el('zone').value='left';
     await app.el('goal-form').fire('submit');
-    assert.deepEqual(app.spoken.slice(before),[next.instruction.text]);
+    assert.deepEqual(app.spoken.slice(before),[`모의 시연. ${next.instruction.text}`]);
     assert.equal(app.el('ack').disabled,false);assert.equal(app.el('repeat').disabled,false);
   } finally {app.close();}
 });
@@ -721,7 +721,7 @@ test("active run prevents preset edits and cancellation masks the compact summar
   try{
     await app.el('goal-form').fire('submit');
     assert.equal(app.el('preset-left').disabled,true);
-    await app.el('preset-left').fire('click');assert.equal(app.el('zone').value,'right');
+    await app.el('preset-left').fire('click');assert.equal(app.el('zone').value,'');
     assert.match(app.el('agent-stage').textContent,/조작 안내/);
     const pending=app.el('cancel').fire('click');
     assert.match(app.el('result-summary').textContent,/취소 결과/);
@@ -856,4 +856,39 @@ test("malformed simulation signal data cannot be accepted as a server snapshot",
   {...base.simulation,observations:[{observation_id:'x',run_id:'other'}]},
   {...base.simulation,baselines:{a:{observation_id:'x',device_observation:{field_summary:{rms:'100',unit:'adc_count'}}}}}
  ])assert.throws(()=>validateRun({...base,simulation},'r'),/유효하지/);
+});
+
+
+test("again rehearsal starts one new run only after a confirmed terminal result",async()=>{
+ const {loadApp,ok,demoMetadata,activeRun}=await import('./app-harness.mjs');let starts=0;
+ const result={...activeRun,status:'uncertain',instruction:null,verdict:{status:'uncertain',reason_codes:['observations_missing'],evidence_ids:[]}};
+ const app=await loadApp(async(url,options)=>{
+  if(url==='/api/demo')return ok(demoMetadata);
+  if(url==='/api/runs'&&options.method==='POST'){starts++;return ok({...result,run_id:'r'+starts});}
+  return ok({...result,run_id:'r'+starts});
+ });
+ try{
+  assert.equal(app.el('restart').disabled,true);
+  await app.el('goal-form').fire('submit');assert.equal(app.el('restart').disabled,false);
+  await app.el('restart').fire('click');assert.equal(starts,2);
+ }finally{app.close();}
+});
+
+test("drawers close with Escape and supported mock speech clearly labels the simulation",async()=>{
+ const {loadApp,ok,demoMetadata,activeRun}=await import('./app-harness.mjs');
+ const app=await loadApp(async url=>ok(url==='/api/demo'?demoMetadata:activeRun));
+ try{
+  app.el('settings-panel').open=true;await app.el('settings-panel').fire('keydown',{key:'Escape'});assert.equal(app.el('settings-panel').open,false);
+  await app.el('goal-form').fire('submit');assert.match(app.spoken.at(-1),/^모의 시연\./);
+  await app.el('restart').fire('click');assert.equal(app.el('restart').disabled,true);
+ }finally{app.close();}
+});
+
+
+test("stopped and failed summaries do not reuse a preceding no-change verdict",async()=>{
+ const {screenSummary}=await import('../../frontend/screen.mjs');
+ const run={execution_mode:'mock_llm',source:'mock',verdict:{status:'mismatch',reason_codes:['no_output_change'],evidence_ids:['obs']}};
+ assert.match(screenSummary({...run,status:'stopped'}).result,/종료/);
+ assert.doesNotMatch(screenSummary({...run,status:'stopped'}).result,/출력 변화/);
+ assert.match(screenSummary({...run,status:'failed'}).result,/오류/);
 });

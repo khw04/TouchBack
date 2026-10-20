@@ -106,3 +106,9 @@ def test_displayed_signals_are_consumed_evidence_with_the_original_baseline():
         assert receipts[0]['action_id']==action and receipts[0]['run_id']==run['run_id']
         assert receipts[0]['device_observation']['field_summary']['rms']==120
         assert result['simulation']['baselines'][action]==baseline
+
+
+def test_scripted_rehearsal_rejects_interactive_mode_before_ack_calls():
+    from app.rehearsal.runner import _check_metadata,RehearsalError
+    with pytest.raises(RehearsalError,match='interactive'):
+        _check_metadata({'enabled':True,'virtual_cooktop':True})

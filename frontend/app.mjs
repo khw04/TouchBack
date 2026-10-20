@@ -1,13 +1,13 @@
-import { signalsFor, trailFor } from "./signals.mjs?v=19";
-import { screenSummary } from "./screen.mjs?v=19";
-import { demoLabel, demoControlsDisabled } from "./demo.mjs?v=19";
-import { createApi, freshSpeechItems, TERMINAL } from "./api.mjs?v=19";
-import { createFixture } from "./fixtures.mjs?v=19";
-import { actionFor, claimableSuccess, phaseFor, unverifiedSnapshot, verdictLabel } from "./presentation.mjs?v=19";
-import { eventChange, eventLabel, eventSource } from "./events.mjs?v=19";
-import { canSendAction, connectionLabel } from "./connection.mjs?v=19";
-import { evidenceReport, evidenceFilename } from "./evidence.mjs?v=19";
-import { createReadGate, regressesTerminalState } from "./read-gate.mjs?v=19";
+import { signalsFor, trailFor } from "./signals.mjs?v=20";
+import { screenSummary } from "./screen.mjs?v=20";
+import { demoLabel, demoControlsDisabled } from "./demo.mjs?v=20";
+import { createApi, freshSpeechItems, TERMINAL } from "./api.mjs?v=20";
+import { createFixture } from "./fixtures.mjs?v=20";
+import { actionFor, claimableSuccess, phaseFor, unverifiedSnapshot, verdictLabel } from "./presentation.mjs?v=20";
+import { eventChange, eventLabel, eventSource } from "./events.mjs?v=20";
+import { canSendAction, connectionLabel } from "./connection.mjs?v=20";
+import { evidenceReport, evidenceFilename } from "./evidence.mjs?v=20";
+import { createReadGate, regressesTerminalState } from "./read-gate.mjs?v=20";
 
 const $ = id => document.getElementById(id);
 const params = new URLSearchParams(location.search);
@@ -39,11 +39,12 @@ $("resume-form").hidden = fixtureMode;
 function controls() {
   const run = state.run;
   const cannotEdit = state.busy || state.startUnknown || Boolean(run && !TERMINAL.has(run.status));
+  $("restart").disabled = state.busy || state.startUnknown || state.demoUnverified || !run || !TERMINAL.has(run.status) || (!fixtureMode && state.connection!=="online");
   $("preset-right").disabled = cannotEdit;
   $("preset-left").disabled = cannotEdit;
   $("demo-apply").disabled = !state.demoInfo || demoControlsDisabled(state);
   $("demo-execution-mode").disabled = !state.demoInfo || demoControlsDisabled(state);
-  $("demo-scenario").disabled = !state.demoInfo || demoControlsDisabled(state);
+  $("demo-scenario").disabled = !state.demoInfo || state.demoUnverified || demoControlsDisabled(state);
   $("demo-reload").disabled = state.busy || state.demoLoading;
   const virtual = Boolean(state.demo?.virtual_cooktop || run?.simulation?.kind === "virtual_cooktop");
   $("ack").hidden = virtual;
@@ -116,6 +117,7 @@ function showError(message) {
 function clearError() { $("error").hidden = true; $("error").textContent = ""; }
 function speak(message) {
   if (!speechAvailable || !message || state.demoUnverified || cancellingCurrentRun()) return;
+  if(state.run?.source === "mock" && !message.startsWith("모의 시연.")) message = `모의 시연. ${message}`;
   state.lastSpoken = message;
   speechSynthesis.cancel();
   const utterance = new SpeechSynthesisUtterance(message);
@@ -197,7 +199,7 @@ function renderAction(run) {
   const [phase, detail] = phaseFor(run);
   $("phase").textContent = phase;
   $("phase-detail").textContent = state.demo && run.source === "mock" && run.status === "awaiting_user"
-    ? run.simulation ? "안내에 따라 왼쪽의 가상 인덕션 버튼을 누르세요. 모의 센서 관측과 판정이 이어집니다." : "실물은 조작하지 말고, 안내를 확인한 뒤 완료 알림을 눌러 모의 관측을 진행하세요." : detail;
+    ? run.simulation ? "가상 인덕션에서 안내한 화구의 버튼을 누르세요. 모의 센서 관측과 판정이 이어집니다." : "실물은 조작하지 말고, 안내를 확인한 뒤 완료 알림을 눌러 모의 관측을 진행하세요." : detail;
   $("instruction").textContent = actionFor(run);
   if (state.demo && run.source === "mock" && TERMINAL.has(run.status)) {
     $("instruction").textContent = screenSummary(run).result;
@@ -353,13 +355,17 @@ async function loadDemo() {
 $("demo-apply").addEventListener("click", () => {
   if (!state.demoInfo || demoControlsDisabled(state)) return;
   transact(async () => {
-    try { renderDemo(await api.configureDemoSettings($("demo-execution-mode").value, $("demo-scenario").value)); }
+    try { renderDemo(await api.configureDemoSettings($("demo-execution-mode").value, $("demo-scenario").value)); $("settings-panel").open = false; }
     catch (error) {
       state.demoUnverified = state.demoUnverified || error.code === "connection" || error.code === "invalid_response" || error.status >= 500;
       $("demo-scenario").value = state.demoInfo.scenario;
       $("demo-status").textContent = `모의 입력 변경을 확인하지 못했습니다. 시연 설정 다시 확인을 누르세요. ${error.message}`;
     }
   });
+});
+$("restart").addEventListener("click", () => {
+  if(state.busy || state.startUnknown || state.demoUnverified || !state.run || !TERMINAL.has(state.run.status) || !fixtureMode && state.connection!=="online") return;
+  $("goal-form").requestSubmit();
 });
 $("demo-scenario").addEventListener("change", () => {
   if (!state.demo || demoControlsDisabled(state)) return;
@@ -381,6 +387,9 @@ for (const zone of ["right", "left"]) {
 }
 $("settings-panel").addEventListener("toggle", () => { if ($("settings-panel").open) $("records-panel").open = false; });
 $("records-panel").addEventListener("toggle", () => { if ($("records-panel").open) $("settings-panel").open = false; });
+for(const panel of ["settings","records"]) $(panel+"-panel").addEventListener("keydown",event=>{
+  if(event.key==="Escape") {$(panel+"-panel").open=false;$(panel+"-toggle").focus();}
+});
 $("close-settings").addEventListener("click", () => { $("settings-panel").open = false; $("settings-toggle").focus(); });
 $("close-records").addEventListener("click", () => { $("records-panel").open = false; $("records-toggle").focus(); });
 $("demo-reload").addEventListener("click", () => transact(loadDemo));
@@ -431,6 +440,16 @@ $("goal-form").addEventListener("submit", event => {
     const input = $("user-input").value.trim();
     if (!input) throw new Error("목표를 입력하세요.");
     reads.invalidate();
+    for(const zone of ["left","right"]) $("level-"+zone).textContent="—";
+    for(const name of ["beep","field","delta"]) $("signal-"+name).textContent="—";
+    $("signal-quality").textContent="확인 전";
+    $("signal-note").textContent="새 실행의 관측을 기다립니다.";
+    $("field-meter").hidden=true;
+    $("agent-trail").replaceChildren();
+    $("result-summary").textContent="새 실행의 응답을 기다립니다.";
+    $("instruction").textContent="서버의 새 조작 안내를 기다리세요.";
+    $("phase").textContent="새 실행 준비 중";
+    if(speechAvailable) speechSynthesis.cancel();
     stopPolling(); state.seen.clear(); state.renderedEventIds = []; state.lastSpoken = "";
     let run;
     const request = { user_input: input, source: $("source").value, zone_id: $("zone").value || null };
@@ -588,6 +607,7 @@ $("retry").addEventListener("click", async () => {
 $("speech-support").textContent = speechAvailable ? "음성 안내 사용 가능. 안내 다시 듣기 버튼을 사용할 수 있습니다." : "이 브라우저는 음성 안내를 지원하지 않습니다. 화면의 안내 문구를 확인하세요.";
 if (!speechAvailable) { $("auto-speech").checked = false; $("auto-speech").disabled = true; }
 if (fixtureMode) {
+  $("demo-scenario").hidden = true;
   $("origin").textContent = "UI FIXTURE · 서버 판정 없음";
   $("screen-mode").textContent = "UI 화면 예시";
   $("screen-source").textContent = "화면 연습 · 서버 판정 없음";

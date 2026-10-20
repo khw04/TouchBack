@@ -36,6 +36,8 @@ def _json(client, method, path, **kwargs):
 
 
 def _check_metadata(data):
+    if isinstance(data,dict) and data.get("virtual_cooktop") is True:
+        raise RehearsalError("virtual cooktop is interactive; use its browser buttons or restart in scripted demo mode")
     if (not isinstance(data, dict) or data.get("enabled") is not True or data.get("source") != "mock"
             or data.get("execution_mode") != "mock_llm"
             or data.get("physical_validation_performed") is not False

@@ -1,5 +1,5 @@
 // Plain-language summaries of server state; never infer sensor measurements.
-import { claimableSuccess } from "./presentation.mjs?v=19";
+import { claimableSuccess } from "./presentation.mjs?v=20";
 const reasons = {
   sensor_adapter_unconfigured: "센서 입력이 설정되지 않아 변화를 확인할 수 없어요.",
   sensor_integrity_check_failed: "센서 사전 점검을 통과하지 못해 조작을 중단했어요.",
