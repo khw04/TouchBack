@@ -692,3 +692,8 @@ footer{
     font-size:.75rem
   }
 }
+
+.ring > output {font-size:2rem;color:#e5f2bb;font-variant-numeric:tabular-nums;}
+.touch-controls {display:flex;justify-content:center;gap:12px;}
+.touch-controls button {padding:0;width:44px;height:40px;min-height:40px;font-size:1.5rem;border:1px solid #667c70;background:#263b32;color:#e1eee5;}
+.touch-controls button:disabled {opacity:.3;}

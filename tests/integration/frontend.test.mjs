@@ -767,3 +767,70 @@ test("confirmed cancellation replaces compact pending text with the stopped resu
     assert.equal(app.el('start').disabled,false);
   }finally{app.close();}
 });
+
+
+test("local disabled demo requires explicit screen activation without a model fallback",async()=>{
+ const {loadApp,ok,demoMetadata}=await import('./app-harness.mjs');
+ const disabled={enabled:false,manageable:true,api_key_configured:false,model:'configured-model',execution_mode:'backend_stub',scenario:'normal',scenarios:['normal','recovery']};
+ const calls=[];
+ const app=await loadApp(async(url,options)=>{calls.push([url,options.body]);return ok(url==='/api/demo'?disabled:{...demoMetadata,manageable:true,api_key_configured:false,virtual_cooktop:true});});
+ try{
+  assert.equal(app.el('start').disabled,true);assert.equal(app.el('settings-panel').open,true);
+  assert.equal(app.el('real-mode-option').disabled,true);
+  await app.el('demo-apply').fire('click');
+  assert.deepEqual(JSON.parse(calls.at(-1)[1]),{execution_mode:'mock_llm',scenario:'normal'});
+  assert.equal(app.el('start').disabled,false);
+ }finally{app.close();}
+});
+
+test("scenario selection applies once and lost response locks starting until confirmed",async()=>{
+ const {loadApp,ok,demoMetadata}=await import('./app-harness.mjs');let changed=false;const posts=[];
+ const app=await loadApp(async(url,options)=>{
+  if(options.method==='POST'){posts.push(url);changed=true;throw new Error('response lost');}
+  return ok({...demoMetadata,scenario:changed?'recovery':'normal'});
+ });
+ try{
+  app.el('demo-scenario').value='recovery';await app.el('demo-scenario').fire('change');
+  assert.deepEqual(posts,['/api/demo/scenario']);assert.equal(app.el('start').disabled,true);
+  await app.el('demo-reload').fire('click');assert.equal(app.el('start').disabled,false);
+  assert.equal(app.el('demo-scenario').value,'recovery');
+ }finally{app.close();}
+});
+
+
+test("virtual button performs one press and one observation without an extra ack",async()=>{
+ const {loadApp,ok,demoMetadata,activeRun}=await import('./app-harness.mjs');const posts=[];
+ const sim={kind:'virtual_cooktop',levels:{left:5,right:5},last_press:null,observations:[]};
+ const initial={...activeRun,simulation:sim};
+ const ended={...initial,status:'succeeded',instruction:null,verdict:{status:'success',verification_level:'exact_step',goal_satisfied:true,reason_codes:[],evidence_ids:['e1']},simulation:{...sim,levels:{left:5,right:6}}};
+ const app=await loadApp(async(url,options)=>{
+  if(url==='/api/demo')return ok({...demoMetadata,virtual_cooktop:true});
+  if(options.method==='POST')posts.push(url);
+  if(url.endsWith('/press'))return ok({...initial,status:'observing',simulation:ended.simulation});
+  if(url.endsWith('/step'))return ok(ended);
+  return ok(initial);
+ });
+ try{
+  await app.el('goal-form').fire('submit');assert.equal(app.el('ack').hidden,true);
+  await app.el('virtual-right-increase').fire('click');
+  assert.equal(posts.filter(p=>p.endsWith('/press')).length,1);assert.equal(posts.filter(p=>p.endsWith('/step')).length,1);
+  assert.equal(posts.filter(p=>p.endsWith('/ack')).length,0);assert.equal(app.el('level-right').textContent,'6');
+  assert.equal(app.el('virtual-right-increase').disabled,true);assert.match(app.el('result-summary').textContent,/모의 관측에서/);
+ }finally{app.close();}
+});
+
+test("lost virtual press response blocks further presses until status is rechecked",async()=>{
+ const {loadApp,ok,demoMetadata,activeRun}=await import('./app-harness.mjs');let presses=0;
+ const run={...activeRun,simulation:{kind:'virtual_cooktop',levels:{left:5,right:5},last_press:null,observations:[]}};
+ const app=await loadApp(async(url)=>{
+  if(url==='/api/demo')return ok({...demoMetadata,virtual_cooktop:true});
+  if(url.endsWith('/press')){presses++;throw new Error('lost');}
+  return ok(run);
+ });
+ try{
+  await app.el('goal-form').fire('submit');await app.el('virtual-right-increase').fire('click');
+  assert.equal(app.el('virtual-right-increase').disabled,true);
+  await app.el('virtual-right-increase').fire('click');assert.equal(presses,1);
+  await app.el('retry').fire('click');assert.equal(app.el('virtual-right-increase').disabled,false);assert.equal(presses,1);
+ }finally{app.close();}
+});

@@ -10,6 +10,7 @@ from fastapi import APIRouter, status
 from pydantic import BaseModel, ConfigDict
 
 from app.adapters.demo_setup import build_demo_adapter
+from app.adapters.virtual_cooktop import VirtualCooktopAdapter
 from app.agent.orchestrator import FATAL_LLM_ERRORS, AgentOrchestrator
 from app.agent.recovery import RecoveryDecisionType
 from app.config import settings
@@ -113,6 +114,7 @@ class RunStore:
         self._runs: dict[str, RunState] = {}
         self._active_run_id: str | None = None
         self._clock = clock
+        self.virtual_demo = False
 
     def set_clock(self, clock: Callable[[], datetime] | None) -> None:
         with self._lock:
@@ -123,6 +125,7 @@ class RunStore:
             self._runs.clear()
             self._active_run_id = None
             self._clock = None
+            self.virtual_demo = False
 
     def _now_utc(self) -> datetime:
         if self._clock is not None:
@@ -212,6 +215,7 @@ class RunStore:
             settings.execution_mode = mode
             settings.mock_scenario = scenario
             settings.demo_enabled = True
+            self.virtual_demo = True
 
     def configure_mock_scenario(self, scenario: str) -> None:
         from app.adapters.demo_setup import SCENARIOS
@@ -339,7 +343,7 @@ class RunStore:
                 created_at=now,
                 status_updated_at=now,
             )
-            adapter = resolve_adapter_for_run(temp_state)
+            adapter = VirtualCooktopAdapter(settings.mock_scenario, goal.zone_id) if self.virtual_demo and req.source == "mock" and exec_mode != "backend_stub" else resolve_adapter_for_run(temp_state)
             temp_state.adapter = adapter
 
             state = temp_state
@@ -535,7 +539,8 @@ class RunStore:
         return RunResponse(run_id=state.run_id, status=state.status,
                            execution_mode=state.execution_mode, source=state.source,
                            instruction=state.instruction, verdict=state.verdict,
-                           events=state.events).model_copy(deep=True)
+                           events=state.events,
+                           simulation=state.adapter.operator_view() if isinstance(state.adapter,VirtualCooktopAdapter) else None).model_copy(deep=True)
 
     def get_run(self, run_id: str) -> RunResponse:
         with self._lock:
@@ -555,7 +560,30 @@ class RunStore:
                 instruction=state.instruction,
                 verdict=state.verdict,
                 events=state.events,
+                simulation=state.adapter.operator_view() if isinstance(state.adapter,VirtualCooktopAdapter) else None,
             )
+
+    def press_virtual(self, run_id: str, action_id: str, zone: str, operation: str) -> RunResponse:
+        with self._lock:
+            state=self._runs.get(run_id)
+            if not state: raise RunApiException(404,"unknown_run","실행을 찾을 수 없습니다.")
+            self._check_and_expire(state,self._now_utc())
+            adapter=state.adapter
+            if not isinstance(adapter,VirtualCooktopAdapter):
+                raise RunApiException(409,"validation","가상 인덕션 실행이 아닙니다.")
+            if action_id in adapter.presses:
+                try: adapter.press(action_id,zone,operation,state.action_window_start_ms,state.action_window_end_ms)
+                except ValueError: raise RunApiException(409,"stale_action","같은 조작 ID에 다른 버튼을 보낼 수 없습니다.")
+                return self.get_snapshot(state)
+            if state.status!="awaiting_user" or state.current_action_id!=action_id or self._active_run_id!=run_id:
+                raise RunApiException(409,"stale_action","현재 조작 안내를 확인하세요.")
+            adapter.press(action_id,zone,operation,state.action_window_start_ms,state.action_window_end_ms)
+            state.status="observing"
+            state.last_acked_action_id=action_id
+            state.status_updated_at=self._now_utc()
+            state.generation+=1
+            self._add_event(state,"observation","가상 버튼 조작 확인. 모의 센서 관측을 대기합니다.",action_id)
+            return self.get_snapshot(state)
 
     def ack_run(self, run_id: str, req: AckRequest) -> AckResponse:
         with self._lock:
@@ -580,6 +608,8 @@ class RunStore:
                 )
 
             if req.action_id == state.current_action_id:
+                if isinstance(state.adapter,VirtualCooktopAdapter) and req.action_id not in state.adapter.presses:
+                    raise RunApiException(409,"stale_action","가상 인덕션 버튼을 먼저 조작하세요.")
                 if state.last_acked_action_id != req.action_id:
                     state.status = "observing"
                     state.status_updated_at = now
@@ -801,6 +831,7 @@ class RunStore:
                     instruction=current_state.instruction,
                     verdict=current_state.verdict,
                     events=current_state.events,
+                    simulation=current_state.adapter.operator_view() if isinstance(current_state.adapter,VirtualCooktopAdapter) else None,
                 )
 
             now = self._now_utc()
@@ -854,6 +885,7 @@ class RunStore:
                         instruction=current_state.instruction,
                         verdict=current_state.verdict,
                         events=current_state.events,
+                    simulation=current_state.adapter.operator_view() if isinstance(current_state.adapter,VirtualCooktopAdapter) else None,
                     )
                 elif rec_res.decision.value == "late_success":
                     next_status = "succeeded"
@@ -898,6 +930,7 @@ class RunStore:
                 instruction=current_state.instruction,
                 verdict=current_state.verdict,
                 events=current_state.events,
+                simulation=current_state.adapter.operator_view() if isinstance(current_state.adapter,VirtualCooktopAdapter) else None,
             )
 
 
